@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Expense book</title><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="icon" href="icon.svg" type="image/svg+xml"><meta name="theme-color" content="#1d33e0"><link rel="stylesheet" href="legacy.css"></head>
+<body>
+<header class="masthead"><a class="wordmark" href="#ledger">Expense book</a><a href="index.html">New version</a><div class="theme-switch" role="group" aria-label="Appearance"><button type="button" data-theme-choice="light">Day</button><button type="button" data-theme-choice="dark">Night</button><button type="button" data-theme-choice="system">Auto</button></div></header>
+<main class="slip-wrap"><div class="slip">
+<div class="slip-head"><span class="qid">YOUR EVERYDAY MONEY</span><span class="kind">LOCAL PREVIEW</span></div>
+<div class="heading"><div><p class="eyebrow" id="section-label">01 / LEDGER</p><h1 id="page-title">What you spent.</h1></div><button class="primary" id="add">+ Add</button></div>
+<p class="lede" id="page-description">Keep the small things in view.</p>
+<p class="storage-note">Saved on this device with a versioned browser database. Google Sheets sync is set up in the new interface (Settings → Sync). Keep a separate backup.</p>
+<nav aria-label="Main navigation" id="navigation"></nav><div id="content"></div><footer><span>ONE ENTRY AT A TIME.</span><span>PRIVATE TO THIS BROWSER</span></footer>
+</div></main>
+<dialog id="editor"><form id="editor-form"><div class="slip-head"><span class="qid">YOUR LEDGER</span><button type="button" id="close-editor">Close</button></div><h2 id="editor-title"></h2><div id="editor-fields" class="form-grid"></div><p id="editor-error" class="error" role="alert"></p><div class="form-actions"><button type="button" id="cancel-editor">Cancel</button><button class="primary" type="submit">Save</button></div></form></dialog><p id="status" role="status" aria-live="polite" hidden></p><script type="module" src="app.js"></script></body></html>

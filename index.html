@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Expense book</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Expense book">
+  <!-- The paper colour of each theme. theme.js keeps these in step with a manual choice. -->
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f5">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131726">
+  <!-- Apply a saved light/dark choice before the first paint. -->
+  <script>
+    try {
+      var saved = localStorage.getItem('expense-book.theme');
+      if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+    } catch (error) { /* Storage is unavailable; follow the system. */ }
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#today">Expense book</a>
+    <nav class="tabs" id="tabs" aria-label="Main"></nav>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Theme: System" title="Theme: System"></button>
+  </header>
+
+  <main class="screen" id="screen">
+    <p class="note boot-note">Opening your ledger.</p>
+  </main>
+
+  <p class="toast" id="toast" role="status" aria-live="polite" hidden></p>
+
+  <script type="module" src="ui/main.js"></script>
+</body>
+</html>

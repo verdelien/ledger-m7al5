@@ -1,0 +1,3436 @@
+/* ==========================================================================
+   Expense book — new interface
+   Print-slip style: paper, ink, blue and vermilion. Square controls, thin
+   lines, no rounded corners. Components only use the variables below, so
+   the dark theme is a change of variables and nothing else.
+
+   Mobile first. The base rules are the phone layout (iPhone, 393 px wide):
+   full-bleed content, a bottom tab bar, a sticky Save button. From 768 px
+   (iPad) the tabs become a rail on the left and the slip card returns.
+   From 1024 px (iPad landscape) Today shows two columns.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Tokens
+   -------------------------------------------------------------------------- */
+
+:root {
+  --paper: #f7f7f5;
+  --slip: #fcfcfa;
+  --ink: #1b2340;
+  --muted: #5f667b;
+  --blue: #1d33e0;        /* text accents, selection, outlines */
+  --blue-fill: #1d33e0;   /* primary button and selected pill background */
+  --blue-deep: #1428c4;   /* button hover */
+  --on-fill: #f7f4ec;     /* text on blue or red */
+  --red: #e0392c;         /* labels, current item, focus. Bold or graphic use only. */
+  --ok: #1f7a55;          /* money coming in */
+  --line: rgba(27, 35, 64, .14);
+  --line-strong: rgba(27, 35, 64, .45);
+  --tint: rgba(29, 51, 224, .05);
+  --dot: rgba(31, 134, 184, .28);
+  --dot-soft: rgba(31, 134, 184, .10); /* phone: texture behind the content itself */
+  --shadow: drop-shadow(0 1px 0 rgba(27, 35, 64, .10)) drop-shadow(0 18px 26px rgba(27, 35, 64, .12));
+  --slip-edge: none;
+
+  /* No remote fonts: named faces are used when installed, otherwise the system's. */
+  --serif: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --sans: var(--mono); /* user choice 2026-11-12: typewriter everywhere */
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --wide: Archivo, "Arial Black", "Helvetica Neue", Arial, sans-serif;
+
+  /* Spacing scale. Every margin, padding and gap uses one of these. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  --control: 44px;        /* height of every field and the smallest touch target */
+  --header-height: 52px;
+  --tabbar-height: 56px;
+  --rail: 88px;
+  --gutter: var(--s4);
+  /* Side gutters that also clear the notch in landscape. */
+  --gutter-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+  --gutter-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  color-scheme: light;
+}
+
+/* Dark: light ink on deep blue paper. Used when the system is dark and no
+   explicit light choice was made, or when Dark is chosen. Keep both blocks
+   the same. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #131726;
+    --slip: #1b2033;
+    --ink: #e9e6dd;
+    --muted: #9ea3b5;
+    --blue: #7d8cff;
+    --blue-fill: #2f45f0;
+    --blue-deep: #4257ff;
+    --on-fill: #f7f4ec;
+    --red: #ff6b5e;
+    --ok: #6fcf9f;
+    --line: rgba(233, 230, 221, .14);
+    --line-strong: rgba(233, 230, 221, .45);
+    --tint: rgba(125, 140, 255, .08);
+    --dot: rgba(120, 190, 230, .14);
+    --dot-soft: rgba(120, 190, 230, .07);
+    --shadow: drop-shadow(0 1px 0 rgba(0, 0, 0, .45)) drop-shadow(0 18px 28px rgba(0, 0, 0, .35));
+    --slip-edge: inset 0 1px 0 rgba(255, 255, 255, .04);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #131726;
+  --slip: #1b2033;
+  --ink: #e9e6dd;
+  --muted: #9ea3b5;
+  --blue: #7d8cff;
+  --blue-fill: #2f45f0;
+  --blue-deep: #4257ff;
+  --on-fill: #f7f4ec;
+  --red: #ff6b5e;
+  --ok: #6fcf9f;
+  --line: rgba(233, 230, 221, .14);
+  --line-strong: rgba(233, 230, 221, .45);
+  --tint: rgba(125, 140, 255, .08);
+  --dot: rgba(120, 190, 230, .14);
+  --dot-soft: rgba(120, 190, 230, .07);
+  --shadow: drop-shadow(0 1px 0 rgba(0, 0, 0, .45)) drop-shadow(0 18px 28px rgba(0, 0, 0, .35));
+  --slip-edge: inset 0 1px 0 rgba(255, 255, 255, .04);
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------
+   2. Base
+   -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  /* Phone: the page itself is the paper, with a faint, sparse halftone. */
+  background:
+    radial-gradient(circle, var(--dot-soft) 1px, transparent 1.4px) 0 0 / 16px 16px,
+    var(--paper);
+  color: var(--ink);
+  font: 400 16px/1.5 var(--sans);
+  /* Room for the fixed tab bar. */
+  padding-bottom: calc(var(--tabbar-height) + var(--safe-bottom) + var(--s5));
+  overflow-wrap: break-word;
+}
+
+h1,
+h2,
+p,
+ul {
+  margin: 0;
+}
+
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--blue);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  color: var(--red);
+}
+
+/* Inherits 16px from the body, so iOS never zooms in on focus. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  border-radius: 0;
+  touch-action: manipulation;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: .35;
+}
+
+:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 3px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   3. Header and navigation
+   -------------------------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  height: calc(var(--header-height) + var(--safe-top));
+  padding: var(--safe-top) var(--gutter-right) 0 var(--gutter-left);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control);
+  color: var(--ink);
+  text-decoration: none;
+  font: 800 17px/1.1 var(--wide);
+  font-stretch: 125%;
+  letter-spacing: -.01em;
+  text-transform: uppercase;
+}
+
+.brand:hover {
+  color: var(--blue);
+}
+
+/* A square icon button: sun, moon, or a half disc for System. */
+.theme-toggle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--control);
+  height: var(--control);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: var(--ink);
+}
+
+.theme-toggle svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.theme-toggle:hover {
+  color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+
+/* Phone: a fixed bar along the bottom, five equal columns. */
+.tabs {
+  position: fixed;
+  z-index: 10;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  background: var(--paper);
+  border-top: 1px solid var(--line-strong);
+  padding: 0 env(safe-area-inset-right, 0px) var(--safe-bottom) env(safe-area-inset-left, 0px);
+}
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s1);
+  min-width: 0;
+  min-height: var(--tabbar-height);
+  border-top: 2px solid transparent;
+  margin-top: -1px;
+  color: var(--muted);
+  text-decoration: none;
+  font: 500 10px/1 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tab-icon {
+  display: block;
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.tab:hover {
+  color: var(--blue);
+}
+
+.tab[aria-current="page"] {
+  color: var(--blue);
+  border-top-color: var(--blue);
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------------------
+   4. Slip (the main surface of each screen)
+   -------------------------------------------------------------------------- */
+
+.screen {
+  padding: var(--s3) var(--gutter-right) 0 var(--gutter-left);
+}
+
+/* Phone: no card. The content runs edge to edge inside the gutter. */
+.slip-wrap {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.slip-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding-bottom: var(--s2);
+  margin-bottom: var(--s4);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 500 11px/1.2 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.slip-head .qid {
+  color: var(--blue);
+}
+
+.slip-head .kind {
+  margin-left: auto;
+  color: var(--red);
+  font-weight: 700;
+}
+
+.screen-title {
+  margin-bottom: var(--s3);
+  font: 800 24px/1.15 var(--wide);
+  letter-spacing: -.02em;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s5) 0 var(--s3);
+  color: var(--muted);
+  font: 500 11.5px/1.2 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.section-title::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--red);
+}
+
+.slip-head + .section-title,
+.today-layout .section-title {
+  margin-top: 0;
+}
+
+.note,
+.hint,
+.empty {
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.note {
+  margin-bottom: var(--s3);
+}
+
+.hint {
+  margin-top: var(--s2);
+}
+
+.empty {
+  padding: var(--s2) 0 var(--s2) var(--s3);
+  border-left: 2px solid var(--blue);
+}
+
+.data-note {
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px dashed var(--line-strong);
+}
+
+.boot-note {
+  max-width: 640px;
+  margin: var(--s5) auto;
+}
+
+/* --------------------------------------------------------------------------
+   5. Form controls
+   One left edge, one height (44px), one underline.
+   -------------------------------------------------------------------------- */
+
+.field {
+  min-width: 0;
+  margin-bottom: var(--s4);
+}
+
+.field label,
+.field-label {
+  display: block;
+  margin-bottom: var(--s1);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.field-label {
+  margin-bottom: var(--s2);
+}
+
+input[type="text"],
+input[type="date"],
+select {
+  display: block;
+  width: 100%;
+  height: var(--control);
+  margin: 0;
+  padding: 0;
+  background-color: transparent;
+  border: 0;
+  border-bottom: 1.5px solid var(--line-strong);
+  font-size: 16px;
+  line-height: 1.25;
+  text-align: left;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* The native arrow is replaced by a small drawn one in the text colour. */
+select {
+  padding-right: var(--s5);
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 9px) 50%, calc(100% - 4px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  text-overflow: ellipsis;
+}
+
+/* iOS centres the text of a date field unless told otherwise. */
+input[type="date"] {
+  text-align: left;
+}
+
+input[type="date"]::-webkit-date-and-time-value {
+  margin: 0;
+  text-align: left;
+}
+
+input[type="date"]::-webkit-datetime-edit {
+  padding: 0;
+}
+
+input:focus-visible,
+select:focus-visible {
+  border-bottom-color: var(--blue);
+}
+
+input::placeholder {
+  color: var(--muted);
+  opacity: .8;
+}
+
+/* Two fields side by side. Labels are one line, so the controls line up. */
+.field-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s4);
+  align-items: end;
+}
+
+/* Amount: a large figure, with the currency as a small chip on its baseline. */
+.amount-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding-bottom: var(--s1);
+  border-bottom: 1.5px solid var(--line-strong);
+}
+
+.amount-row:focus-within {
+  border-bottom-color: var(--blue);
+}
+
+.amount-row .amount-input {
+  flex: 1;
+  min-width: 0;
+  height: 56px;
+  border-bottom: 0;
+  font: 800 32px/1.1 var(--wide);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Under the amount: the currency button on the left, the date on the right. */
+.entry-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  margin-bottom: var(--s4);
+}
+
+.entry-meta-row input[type="date"] {
+  flex: none;
+  width: auto;
+  min-width: 0;
+  text-align: right;
+  /* iOS draws the date text high inside its box; pin both controls to one 44px line. */
+  height: 44px;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 44px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.entry-meta-row > * {
+  box-sizing: border-box;
+  height: 44px;
+  margin: 0;
+}
+
+.entry-meta-row input[type="date"]::-webkit-date-and-time-value {
+  text-align: right;
+  margin: 0;
+  line-height: 44px;
+}
+
+.caret {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The currency as plain text with a small arrow. */
+.cur-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s2);
+  height: var(--control);
+  padding: 0;
+  background: none;
+  border: 0;
+  border-bottom: 1.5px solid var(--line-strong);
+  font: 700 16px/1.25 var(--mono);
+  letter-spacing: .04em;
+}
+
+.cur-button:hover,
+.cur-button[aria-expanded="true"],
+.paid-button:hover,
+.paid-button[aria-expanded="true"] {
+  border-bottom-color: var(--blue);
+  color: var(--blue);
+}
+
+/* Paid from: icon, name, currency. */
+.paid-button {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  height: var(--control);
+  padding: 0;
+  background: none;
+  border: 0;
+  border-bottom: 1.5px solid var(--line-strong);
+  font-size: 16px;
+  text-align: left;
+}
+
+.paid-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paid-currency {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: .04em;
+}
+
+.paid-button .caret {
+  margin-left: auto;
+}
+
+.tag-estimate {
+  padding: 0 var(--s1);
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.form-error {
+  margin: 0 0 var(--s4);
+  padding: var(--s2) 0 var(--s2) var(--s3);
+  border-left: 2px solid var(--red);
+  font-size: 14px;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  margin-top: var(--s2);
+}
+
+/* Phone: Save stays within reach of the thumb, just above the tab bar,
+   for as long as the form is on screen. */
+.entry-form .form-actions {
+  position: sticky;
+  z-index: 5;
+  bottom: calc(var(--tabbar-height) + var(--safe-bottom));
+  flex-wrap: nowrap;
+  margin: var(--s2) calc(-1 * var(--gutter-right)) 0 calc(-1 * var(--gutter-left));
+  padding: var(--s2) var(--gutter-right) var(--s2) var(--gutter-left);
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+}
+
+.entry-form .form-actions .btn-primary {
+  flex: 1;
+}
+
+/* Buttons */
+
+.btn-primary,
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 var(--s5);
+  border: 0;
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: .04em;
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: var(--blue-fill);
+  color: var(--on-fill);
+  /* One small notch, bottom-right. */
+  clip-path: polygon(
+    0 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) calc(100% - 5px),
+    calc(100% - 5px) 100%, 0 100%
+  );
+}
+
+.btn-primary:hover {
+  background: var(--blue-deep);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.btn-secondary:hover {
+  color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+
+.btn-small {
+  min-height: var(--control);
+  padding: 0 var(--s4);
+}
+
+/* Quiet text action: mono, underlined. */
+.btn-text {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control);
+  padding: 0 var(--s1);
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: 500 13px/1 var(--mono);
+  letter-spacing: .04em;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 4px;
+}
+
+.btn-text:hover {
+  color: var(--blue);
+}
+
+.btn-text.is-armed {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration-color: var(--red);
+}
+
+.icon-btn {
+  width: var(--control);
+  height: var(--control);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 16px;
+}
+
+.icon-btn:hover:not(:disabled) {
+  color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+
+/* Joined choices */
+.segmented {
+  display: inline-flex;
+  max-width: 100%;
+  margin-bottom: var(--s1);
+}
+
+.segmented button {
+  min-height: var(--control);
+  padding: 0 var(--s4);
+  margin-left: -1px;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  font-size: 16px;
+}
+
+.segmented button:first-child {
+  margin-left: 0;
+}
+
+.segmented button:hover {
+  color: var(--blue);
+}
+
+.segmented button.is-selected {
+  position: relative;
+  background: var(--blue-fill);
+  border-color: var(--blue-fill);
+  color: var(--on-fill);
+}
+
+/* Fold (details/summary) */
+.fold {
+  margin-top: var(--s3);
+}
+
+.fold > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control);
+  cursor: pointer;
+  color: var(--blue);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.fold-body {
+  padding: var(--s3) var(--s3) var(--s1);
+  border-left: 2px solid var(--blue);
+  background: var(--tint);
+}
+
+/* --------------------------------------------------------------------------
+   6. Category picker
+   -------------------------------------------------------------------------- */
+
+.cat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Tiles after an open panel flow back up beside the opened tile, so the
+     panel sits directly under the row of the tile that was tapped. */
+  grid-auto-flow: row dense;
+  gap: var(--s2);
+}
+
+/* Icon centred above the label. Labels wrap at spaces only, never mid-word. */
+.cat-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s1);
+  min-width: 0;
+  min-height: 64px;
+  padding: var(--s2) var(--s1);
+  background: transparent;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: center;
+  -webkit-hyphens: none;
+  hyphens: none;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.cat-tile-label {
+  max-width: 100%;
+}
+
+/* A label with a very long word is set slightly smaller so the word fits. */
+.cat-tile.is-long {
+  font-size: 11.5px;
+  letter-spacing: -.01em;
+}
+
+.cat-tile:hover,
+.cat-tile.is-open {
+  color: var(--blue);
+  box-shadow: inset 0 0 0 1.5px var(--blue);
+}
+
+.cat-tile.is-selected {
+  background: var(--blue-fill);
+  box-shadow: none;
+  color: var(--on-fill);
+  font-weight: 600;
+}
+
+.cat-tile.is-selected.is-open {
+  box-shadow: inset 0 -3px 0 var(--on-fill);
+}
+
+/* Category icon: an emoji or a pixel drawing, sitting on the text line. */
+.cat-icon {
+  display: inline-block;
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+  margin-right: .4em;
+  vertical-align: -.18em;
+}
+
+.cat-icon--emoji {
+  width: auto;
+  min-width: 1.1em;
+  line-height: 1.1;
+  text-align: center;
+  vertical-align: baseline;
+}
+
+.cat-tile .cat-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.cat-tile .cat-icon--emoji {
+  width: auto;
+  font-size: 18px;
+  line-height: 18px;
+}
+
+.cat-group-name {
+  min-width: 0;
+}
+
+/* Subcategories: a full-width row of pills under the tapped tile's row. */
+.cat-panel {
+  grid-column: 1 / -1;
+  padding: var(--s3);
+  border-left: 2px solid var(--blue);
+  background: var(--tint);
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.pill {
+  min-height: var(--control);
+  padding: 0 var(--s3);
+  background: var(--slip);
+  border: 1px solid var(--line-strong);
+  font-size: 14px;
+}
+
+.pill:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.pill.is-selected {
+  background: var(--blue-fill);
+  border-color: var(--blue-fill);
+  color: var(--on-fill);
+}
+
+.cat-group {
+  margin-top: var(--s2);
+  border-top: 1px dashed var(--line-strong);
+}
+
+.cat-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: var(--control);
+  padding: 0;
+  background: none;
+  border: 0;
+  font-size: 15px;
+  text-align: left;
+}
+
+.cat-group-head:hover,
+.cat-group-head.has-selection {
+  color: var(--blue);
+}
+
+.cat-group-head.has-selection {
+  font-weight: 700;
+}
+
+.cat-group-body {
+  padding: var(--s1) 0 var(--s2);
+}
+
+.fold-mark {
+  flex: none;
+  width: 16px;
+  color: var(--muted);
+  font: 500 14px/1 var(--mono);
+  text-align: center;
+}
+
+.cat-chosen {
+  margin-top: var(--s2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cat-chosen strong {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+/* The chosen category, above the grid. */
+.cat-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: var(--control);
+  margin: 0 0 var(--s2);
+  font-size: 14px;
+}
+
+.cat-summary--empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cat-summary-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--blue);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cat-summary .cat-icon {
+  flex: none;
+}
+
+/* --------------------------------------------------------------------------
+   7. Today
+   -------------------------------------------------------------------------- */
+
+.today-layout {
+  display: grid;
+  gap: var(--s6);
+}
+
+.today-layout > * {
+  min-width: 0;
+}
+
+.day-group {
+  margin-bottom: var(--s4);
+}
+
+.day-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--muted);
+  font: 500 11px/1.4 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.day-total {
+  color: var(--ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.entry,
+.list-row {
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.entry-summary,
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-height: 52px;
+  padding: var(--s2) 0;
+}
+
+.entry-summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.entry-summary::-webkit-details-marker {
+  display: none;
+}
+
+.entry-summary:hover .entry-title {
+  color: var(--blue);
+}
+
+.entry-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.entry-title {
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.entry-meta {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-amount {
+  flex: none;
+  font: 500 15px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.entry-amount.is-income {
+  color: var(--ok);
+}
+
+.entry-detail {
+  margin: 0 0 var(--s3);
+  padding: var(--s2) var(--s3) var(--s1);
+  border-left: 2px solid var(--blue);
+  background: var(--tint);
+}
+
+.detail-line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s1) 0;
+  font-size: 13.5px;
+}
+
+.detail-line > :first-child {
+  color: var(--muted);
+}
+
+.detail-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s4);
+  margin-top: var(--s1);
+}
+
+/* --------------------------------------------------------------------------
+   8. Settings: category editor
+   -------------------------------------------------------------------------- */
+
+.cat-editor .segmented {
+  margin-bottom: var(--s3);
+}
+
+.ed-list--nested {
+  margin: 0 0 var(--s2) var(--s2);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--blue);
+}
+
+.ed-item {
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.ed-list--nested > .ed-item:last-of-type,
+.ed-add {
+  border-bottom: 0;
+}
+
+.ed-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 52px;
+}
+
+.ed-name {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s1) var(--s2);
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--s2) 0;
+  background: none;
+  border: 0;
+  font-size: 15px;
+  text-align: left;
+  align-content: center;
+}
+
+button.ed-name:hover .ed-name-text {
+  color: var(--blue);
+}
+
+.ed-meta {
+  color: var(--muted);
+  font: 500 11px/1.3 var(--mono);
+  letter-spacing: .04em;
+}
+
+.ed-item.is-archived > .ed-row .ed-name-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ed-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.ed-edit {
+  padding: var(--s2) 0 var(--s3);
+}
+
+.ed-move {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-top: var(--s3);
+}
+
+.ed-move-label {
+  flex: none;
+  font-size: 13px;
+  color: var(--ink-soft, inherit);
+}
+
+.ed-move select {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.icon-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  margin-top: var(--s3);
+}
+
+.icon-field-label {
+  color: var(--muted);
+  font: 500 11px/1.3 var(--mono);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.icon-field .segmented {
+  margin-bottom: 0;
+}
+
+.icon-field .icon-emoji-input {
+  width: 4.5em;
+  min-height: 44px;
+  font-size: 20px;
+  text-align: center;
+}
+
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: var(--s1);
+  width: 100%;
+}
+
+.icon-field [hidden] {
+  display: none;
+}
+
+.icon-choice {
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  padding: 0;
+  background: var(--slip);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  font-size: 20px;
+}
+
+.icon-choice .cat-icon {
+  margin: 0;
+}
+
+.icon-choice:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.icon-choice.is-selected {
+  background: var(--blue-fill);
+  border-color: var(--blue-fill);
+  color: var(--on-fill);
+}
+
+.ed-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.ed-add-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s3);
+  align-items: end;
+  padding: var(--s1) 0 var(--s2);
+}
+
+/* --------------------------------------------------------------------------
+   9. Toast
+   -------------------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  z-index: 20;
+  left: var(--gutter-left);
+  right: var(--gutter-right);
+  /* Above the tab bar and the sticky Save button. */
+  bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 72px);
+  max-width: 440px;
+  margin: 0 auto;
+  padding: var(--s3) var(--s4);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 14px;
+  line-height: 1.45;
+  border-left: 3px solid var(--red);
+}
+
+/* --------------------------------------------------------------------------
+   9b. Drag to reorder, the account picker and currencies
+   -------------------------------------------------------------------------- */
+
+/* The grip is the only part of a row that stops the page from scrolling. */
+.drag-handle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--control);
+  height: var(--control);
+  margin-left: calc(var(--s2) * -1);
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.drag-handle:hover {
+  color: var(--blue);
+}
+
+.drag-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.ed-list.is-drag-list {
+  position: relative;
+}
+
+/* The lifted row: opaque paper, a blue edge and a hard printed shadow. */
+.ed-item.is-dragging {
+  position: relative;
+  z-index: 6;
+  background: var(--slip);
+  border-bottom-color: transparent;
+  box-shadow: 0 0 0 1.5px var(--blue), 4px 4px 0 var(--line-strong);
+}
+
+.ed-item.is-dragging .drag-handle {
+  color: var(--blue);
+  cursor: grabbing;
+}
+
+/* Neighbours glide aside to open a gap; the lifted row follows the finger exactly. */
+.is-drag-list > [data-drag-item] {
+  transition: transform 180ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.is-drag-list > [data-drag-item].is-dragging {
+  transition: none;
+  transform-origin: center;
+}
+
+.is-drag-list > [data-drag-item].is-settling {
+  transition: transform 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-drag-list > [data-drag-item] { transition: none; }
+}
+
+.is-drag-sorting,
+.is-drag-sorting * {
+  cursor: grabbing;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Account picker: currency tabs over tiles like the category picker's. */
+.acct-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: var(--s1);
+  margin-bottom: var(--s2);
+}
+
+.acct-tabs button {
+  padding: 0 var(--s3);
+  font-size: 14px;
+  letter-spacing: .04em;
+}
+
+.acct-tile {
+  min-height: 76px;
+}
+
+.acct-balance {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.acct-tile.is-selected .acct-balance {
+  color: inherit;
+  font-weight: 500;
+}
+
+.entry-title .cat-icon {
+  vertical-align: -.15em;
+}
+
+/* Currencies */
+.cur-editor .ed-name-text strong,
+.cur-form-title strong {
+  letter-spacing: .04em;
+}
+
+.cur-form-title {
+  margin: 0 0 var(--s3);
+}
+
+.cur-adder {
+  margin: var(--s3) 0 var(--s4);
+}
+
+.cur-add {
+  margin-bottom: var(--s4);
+}
+
+.cur-search {
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  padding: var(--s2) var(--s3) var(--s3);
+}
+
+.cur-search-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.cur-search-head input {
+  flex: 1;
+  min-width: 0;
+}
+
+.cur-results {
+  max-height: 264px;
+  margin: var(--s2) 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cur-result {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  width: 100%;
+  min-height: var(--control);
+  padding: var(--s2) 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 15px;
+  text-align: left;
+}
+
+.cur-result strong {
+  flex: none;
+  letter-spacing: .04em;
+}
+
+.cur-result:hover {
+  color: var(--blue);
+}
+
+/* Popover (ui/popover.js): a sheet from the bottom on a phone; a panel under
+   its button from 768px. */
+.popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(19, 23, 38, .4);
+}
+
+.popover {
+  position: fixed;
+  z-index: 31;
+  left: 0;
+  right: 0;
+  bottom: var(--pop-bottom, 0px);
+  max-height: min(80vh, var(--pop-max, 80vh));
+  padding: var(--s2) var(--gutter-right) calc(var(--s4) + var(--safe-bottom)) var(--gutter-left);
+  background: var(--slip);
+  border-top: 2px solid var(--ink);
+  color: var(--ink);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s1);
+}
+
+.popover-title {
+  color: var(--muted);
+  font: 500 11px/1.4 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.popover .cur-search {
+  padding: 0;
+  box-shadow: none;
+}
+
+.pop-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pop-option {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: var(--control);
+  padding: 0 var(--s2);
+  border-bottom: 1px dashed var(--line);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.pop-option strong {
+  flex: none;
+  letter-spacing: .04em;
+}
+
+.pop-option-detail {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pop-option:hover,
+.pop-option:focus-visible {
+  background: var(--tint);
+  outline-offset: -2px;
+}
+
+.pop-option[aria-selected="true"] strong {
+  color: var(--blue);
+}
+
+.pop-option[aria-selected="true"]::after {
+  content: "✓";
+  margin-left: auto;
+  color: var(--blue);
+}
+
+/* --------------------------------------------------------------------------
+   10. iPad and wider (768px and up): a navigation rail on the left, and the
+       slip card on dotted paper. One centred column, 640px at most.
+   -------------------------------------------------------------------------- */
+
+@media (min-width: 768px) {
+  :root {
+    --gutter: var(--s6);
+    --rail-width: calc(var(--rail) + env(safe-area-inset-left, 0px));
+    --gutter-left: var(--gutter); /* the rail already clears the left inset */
+  }
+
+  body {
+    /* Static halftone dots on paper. */
+    background:
+      radial-gradient(circle, var(--dot) 1px, transparent 1.4px) 0 0 / 10px 10px,
+      var(--paper);
+    padding: 0 0 var(--s6) var(--rail-width);
+  }
+
+  .topbar {
+    height: calc(64px + var(--safe-top));
+    border-bottom: 0;
+  }
+
+  .brand {
+    font-size: 20px;
+  }
+
+  .tabs {
+    top: 0;
+    right: auto;
+    width: var(--rail-width);
+    display: flex;
+    flex-direction: column;
+    padding: calc(var(--safe-top) + var(--s4)) 0 var(--safe-bottom) env(safe-area-inset-left, 0px);
+    border-top: 0;
+    border-right: 1px solid var(--line-strong);
+    overflow-y: auto;
+  }
+
+  .tab {
+    flex: none;
+    min-height: 64px;
+    margin-top: 0;
+    border-top: 0;
+    border-left: 2px solid transparent;
+    border-right: 2px solid transparent; /* keeps the icon centred */
+  }
+
+  .tab-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .tab[aria-current="page"] {
+    border-left-color: var(--blue);
+    background: var(--tint);
+  }
+
+  .screen {
+    padding-top: 0;
+  }
+
+  .slip-wrap {
+    filter: var(--shadow); /* shadow outside, cut corners inside */
+  }
+
+  .slip {
+    padding: var(--s5) var(--s6) var(--s6);
+    background: var(--slip);
+    box-shadow: var(--slip-edge);
+    /* One notch top-left, a two-step notch bottom-right. */
+    clip-path: polygon(
+      0 6px, 6px 6px, 6px 0, 100% 0,
+      100% calc(100% - 12px), calc(100% - 6px) calc(100% - 12px),
+      calc(100% - 6px) calc(100% - 6px), calc(100% - 12px) calc(100% - 6px),
+      calc(100% - 12px) 100%, 0 100%
+    );
+  }
+
+  .slip-head {
+    padding-bottom: var(--s3);
+  }
+
+  .cat-grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  }
+
+  /* Save sits at the end of the form: there is no tab bar to clear. */
+  .entry-form .form-actions {
+    position: static;
+    margin: var(--s2) 0 0;
+    padding: 0;
+    background: none;
+    border-top: 0;
+  }
+
+  .toast {
+    left: calc(var(--rail-width) + var(--gutter));
+    bottom: var(--s5);
+  }
+}
+
+/* iPad landscape and desktop: Today in two columns, form left, entries right. */
+@media (min-width: 768px) {
+  .popover-backdrop {
+    display: none;
+  }
+
+  .popover {
+    top: var(--pop-top, 0px);
+    left: var(--pop-left, 0px);
+    right: auto;
+    bottom: auto;
+    width: max-content;
+    min-width: 240px;
+    max-width: min(420px, calc(100vw - 16px));
+    max-height: var(--pop-max, 70vh);
+    padding: var(--s2) var(--s3) var(--s3);
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 12px 24px rgba(19, 23, 38, .18);
+  }
+
+  .popover--wide {
+    width: min(420px, calc(100vw - 16px));
+  }
+}
+
+@media (min-width: 1024px) {
+  .slip-wrap--wide {
+    max-width: 1040px;
+  }
+
+  .today-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--s6);
+    align-items: start;
+  }
+
+  .cat-grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn-primary,
+  .cat-tile,
+  .pill,
+  .tab {
+    transition: color .15s, background-color .15s, box-shadow .15s;
+  }
+}
+
+@media print {
+  body {
+    background: none;
+    padding: 0;
+  }
+
+  .tabs,
+  .theme-toggle,
+  .toast {
+    display: none;
+  }
+
+  .slip-wrap {
+    filter: none;
+  }
+
+  .entry-form .form-actions {
+    position: static;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Calendar and forecast
+   --------------------------------------------------------------------------- */
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+}
+
+.cal-title {
+  flex: 1;
+  margin: 0;
+  font: 700 17px/1.2 var(--mono);
+  text-align: center;
+}
+
+.cal-today:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-top: 1px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+}
+
+.cal-weekday {
+  padding: var(--s1) 0;
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--muted);
+  font: 500 10px/1.4 var(--mono);
+  letter-spacing: .06em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.cal-blank,
+.cal-cell {
+  min-height: 64px;
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.cal-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  padding: 3px 2px;
+  background: transparent;
+  border-top: 0;
+  border-left: 0;
+  border-radius: 0;
+  color: var(--ink);
+  font: inherit;
+  text-align: right;
+  cursor: pointer;
+}
+
+.cal-cell:hover,
+.cal-cell[aria-expanded="true"] {
+  background: var(--tint);
+}
+
+.cal-cell.is-today {
+  box-shadow: inset 0 0 0 2px var(--blue);
+}
+
+.cal-daynum {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-direction: row-reverse;
+  color: var(--muted);
+  font: 500 11px/1.3 var(--mono);
+}
+
+.cal-cell.is-today .cal-daynum {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+/* Payday: a small vermilion square. */
+.cal-payday {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--red);
+}
+
+.cal-amount {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font: 700 11px/1.3 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Planned money: outlined and lighter, never mistaken for money spent. */
+.cal-amount--planned {
+  padding: 0 1px;
+  border: 1px dashed var(--line-strong);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.cal-full {
+  display: none;
+}
+
+.cal-code {
+  display: block;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: .04em;
+}
+
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s4);
+  margin: var(--s3) 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cal-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.cal-key .cal-amount {
+  display: inline-block;
+  color: var(--ink);
+}
+
+.cal-key .cal-amount--planned {
+  color: var(--muted);
+}
+
+.cal-sheet {
+  min-width: min(320px, 100%);
+}
+
+.cal-sheet-payday {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s2) 0;
+  font-size: 14px;
+}
+
+.cal-sheet .list-row,
+.fc .list-row {
+  min-height: 44px;
+}
+
+.fc {
+  margin-top: var(--s5);
+}
+
+/* Four ranges: two rows of two on a phone, one row from iPad up. */
+.fc-ranges {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+}
+
+.fc-ranges button {
+  margin: 0 -1px -1px 0;
+  padding: 0 var(--s2);
+  font-size: 14px;
+}
+
+.fc-figures {
+  display: grid;
+  gap: var(--s3);
+  margin: var(--s3) 0 var(--s4);
+}
+
+.fc-figure {
+  padding: var(--s3);
+  border: 1px solid var(--line-strong);
+}
+
+.fc-figure dt {
+  color: var(--muted);
+  font: 500 11px/1.4 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.fc-figure dd {
+  margin: var(--s1) 0 0;
+  font: 700 22px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-figure dd.is-negative {
+  color: var(--red);
+}
+
+.fc-figure dd.fc-detail {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.fc-group {
+  margin-top: var(--s4);
+}
+
+.fc .entry-meta {
+  white-space: normal;
+}
+
+.fc .list-row.is-uncounted .entry-amount {
+  color: var(--muted);
+}
+
+.tag-fixed {
+  flex: none;
+  padding: 0 var(--s1);
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.fc .tag-estimate,
+.cal-sheet .tag-estimate {
+  flex: none;
+  border-style: dashed;
+}
+
+.fc .entry-text,
+.cal-sheet .entry-text {
+  flex: 1;
+}
+
+.inline-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s3);
+  margin: var(--s2) 0;
+}
+
+.inline-form .field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+@media (min-width: 768px) {
+  .cal-blank,
+  .cal-cell {
+    min-height: 92px;
+  }
+
+  .cal-cell {
+    gap: var(--s1);
+    padding: var(--s2);
+  }
+
+  .cal-daynum {
+    font-size: 13px;
+  }
+
+  .cal-amount {
+    font-size: 13px;
+  }
+
+  .cal-amount--planned {
+    padding: 0 var(--s1);
+  }
+
+  .cal-full {
+    display: inline;
+  }
+
+  .cal-short,
+  .cal-code {
+    display: none;
+  }
+
+  .cal-weekday {
+    font-size: 11px;
+  }
+
+  .fc-ranges {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Forecast: custom range, pots left
+   -------------------------------------------------------------------------- */
+
+.fc-ranges button {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fc-custom .field-pair {
+  min-width: min(320px, 100%);
+}
+
+.fc-custom .field {
+  margin-bottom: var(--s2);
+}
+
+.fc-custom .btn-primary,
+.fc-pot-choice .btn-primary {
+  margin-top: var(--s3);
+}
+
+.fc-pots-head {
+  align-items: center;
+  padding: 0;
+}
+
+.fc-pots .entry-amount.is-negative {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: var(--control);
+  border-bottom: 1px dashed var(--line-strong);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.check-row input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--blue-fill);
+}
+
+/* --------------------------------------------------------------------------
+   Settings: one section at a time
+   Phone: a sticky strip of tabs that scrolls sideways. From 768px: a list on
+   the left, the section on the right.
+   -------------------------------------------------------------------------- */
+
+.set-tabs {
+  position: sticky;
+  top: var(--safe-top);
+  z-index: 5;
+  display: flex;
+  margin: calc(-1 * var(--s2)) calc(-1 * var(--gutter-right)) var(--s4) calc(-1 * var(--gutter-left));
+  padding: 0 var(--gutter-right) 0 var(--gutter-left);
+  background: var(--paper);
+  border-bottom: 1px solid var(--line-strong);
+  box-shadow: 0 calc(-1 * var(--safe-top)) 0 var(--paper); /* covers the status bar area when stuck */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.set-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.set-tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-width: var(--control);
+  min-height: var(--control);
+  padding: 0 var(--s3);
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  text-decoration: none;
+  font: 500 12px/1 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.set-tab:hover {
+  color: var(--blue);
+}
+
+.set-tab[aria-current="page"] {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+  font-weight: 700;
+}
+
+.set-tab:focus-visible {
+  outline-offset: -3px;
+}
+
+.set-panel {
+  min-width: 0;
+}
+
+.set-panel > .section-title:first-child {
+  margin-top: 0;
+}
+
+@media (min-width: 768px) {
+  .set-layout {
+    display: grid;
+    grid-template-columns: 148px minmax(0, 1fr);
+    gap: var(--s5);
+    align-items: start;
+  }
+
+  .set-tabs {
+    top: var(--s4);
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    background: none;
+    border-bottom: 0;
+    border-right: 1px solid var(--line-strong);
+    box-shadow: none;
+    overflow: visible;
+  }
+
+  .set-tab {
+    padding: 0 var(--s3);
+    border-bottom: 0;
+    border-left: 2px solid transparent;
+  }
+
+  .set-tab[aria-current="page"] {
+    border-left-color: var(--blue);
+    background: var(--tint);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Settings → Estimates: rows and the edit form share one set of columns.
+   Narrow: name with the amount on its line, category under the name.
+   Wide: name | category | amount | per week | action.
+   -------------------------------------------------------------------------- */
+
+.est-row,
+.est-form {
+  --est-amount: 104px;
+  --est-per: 60px;
+  --est-action: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--est-amount) var(--est-action);
+  column-gap: var(--s3);
+}
+
+.est-row {
+  grid-template-areas:
+    "name amount action"
+    "category per action";
+  align-items: baseline;
+  row-gap: 2px;
+}
+
+.est-name { grid-area: name; }
+.est-category { grid-area: category; }
+.est-amount { grid-area: amount; }
+.est-per { grid-area: per; }
+.est-action { grid-area: action; }
+.est-currency { grid-area: currency; }
+
+.est-row .est-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.est-row .est-amount,
+.est-form .est-amount input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.est-per {
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.est-row .est-action {
+  align-self: center;
+  justify-self: end;
+}
+
+.est-form {
+  grid-template-areas:
+    "name amount amount"
+    "category currency currency";
+  row-gap: var(--s3);
+  align-items: end;
+  margin-bottom: var(--s2);
+}
+
+.est-form .field {
+  margin-bottom: 0;
+}
+
+.est-form .est-amount label {
+  text-align: right;
+}
+
+@media (min-width: 1024px) {
+  .est-row,
+  .est-form {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--est-amount) var(--est-per) var(--est-action);
+  }
+
+  .est-row {
+    grid-template-areas: "name category amount per action";
+    align-items: center;
+  }
+
+  .est-per {
+    text-align: left;
+  }
+
+  .est-form {
+    grid-template-areas: "name category amount currency currency";
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Pots (ui/pots.js, ui/pots-settings.js): the list, a pot's sheet, the payday
+   preview and the toast's Undo.
+   -------------------------------------------------------------------------- */
+
+.pots-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+  margin: var(--s3) 0 var(--s4);
+}
+
+.pots-actions .hint {
+  margin: 0;
+}
+
+/* The whole row is the button that opens the pot. */
+.pot-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-width: 0;
+  min-height: var(--control);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pot-open:hover .entry-title {
+  color: var(--blue);
+}
+
+.pot-row .entry-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* Below zero: vermilion, and a bar so it does not rely on colour alone. */
+.entry-amount.is-negative,
+.pot-facts dd.is-negative,
+.pf-remaining.is-negative {
+  color: var(--red);
+}
+
+.pot-row.is-negative {
+  padding-left: var(--s2);
+  border-left: 3px solid var(--red);
+}
+
+.pot-sheet {
+  min-width: min(340px, 100%);
+}
+
+.pot-sheet .list-row {
+  min-height: 44px;
+}
+
+.pot-facts {
+  margin: 0 0 var(--s3);
+}
+
+.pot-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.pot-fact dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pot-fact dd {
+  margin: 0;
+  font: 500 15px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pot-warning {
+  margin: var(--s2) 0;
+  padding-left: var(--s3);
+  border-left: 3px solid var(--red);
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+/* Payday preview: one editable line per step. */
+.pf-lines {
+  margin: var(--s2) 0;
+}
+
+.pf-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px;
+  gap: var(--s1) var(--s3);
+  align-items: center;
+  padding: var(--s2) 0;
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.pf-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.pf-step {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pf-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pf-line .pf-detail,
+.pf-line .pf-short {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.pf-short {
+  margin: var(--s2) 0;
+  padding-left: var(--s2);
+  border-left: 3px solid var(--red);
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.pf-remaining {
+  margin: var(--s3) 0;
+  font-size: 14px;
+}
+
+/* Settings → Pots: the rollover switch and its target on one line. */
+.pot-rollover {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s2);
+  margin: var(--s3) 0 var(--s2);
+}
+
+.pot-rollover .check-row {
+  border-bottom: 0;
+}
+
+.is-archived > .list-row .entry-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.flow-form {
+  margin-top: var(--s2);
+}
+
+.toast-action {
+  margin-left: var(--s3);
+  padding: var(--s1) var(--s2);
+  background: none;
+  border: 1px solid currentColor;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (min-width: 768px) {
+  .pot-rollover {
+    grid-template-columns: minmax(0, 1fr) 220px;
+    align-items: center;
+  }
+}
+
+/* Today: the Expense | Income switch above the add form */
+.entry-kind {
+  display: flex;
+  margin-bottom: var(--s3);
+}
+
+.entry-kind button {
+  flex: 1 1 0;
+}
+
+/* --------------------------------------------------------------------------
+   Reports (ui/reports.js, ui/report-charts.js)
+   -------------------------------------------------------------------------- */
+
+/* Chart palette: the style's blue, vermilion and ink, then muted print tones.
+   A top-level category keeps the colour of its place in the category order.
+   Light: inks dark enough for paper-coloured text on top (4.5:1 or better).
+   Dark: the same hues lifted, for dark text on top. Keep both dark blocks the same. */
+:root {
+  --chart-1: #1d33e0;  /* blue */
+  --chart-2: #d8362a;  /* vermilion */
+  --chart-3: #96690a;  /* ochre */
+  --chart-4: #0f7f86;  /* teal */
+  --chart-5: #7c3a80;  /* plum */
+  --chart-6: #5f7023;  /* olive */
+  --chart-7: #1b2340;  /* ink */
+  --chart-8: #b83a6e;  /* rose */
+  --chart-9: #7a5230;  /* umber */
+  --chart-10: #5f667b; /* slate */
+  --chart-other: #737889;
+  --chart-on: #fcfcfa; /* text and icons on a chart colour */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --chart-1: #7d8cff;
+    --chart-2: #ff6b5e;
+    --chart-3: #e0b040;
+    --chart-4: #4fc4c9;
+    --chart-5: #c88bd0;
+    --chart-6: #a9bd5c;
+    --chart-7: #e9e6dd;
+    --chart-8: #f08bb0;
+    --chart-9: #c99a6e;
+    --chart-10: #9ea3b5;
+    --chart-other: #8087a0;
+    --chart-on: #131726;
+  }
+}
+
+:root[data-theme="dark"] {
+  --chart-1: #7d8cff;
+  --chart-2: #ff6b5e;
+  --chart-3: #e0b040;
+  --chart-4: #4fc4c9;
+  --chart-5: #c88bd0;
+  --chart-6: #a9bd5c;
+  --chart-7: #e9e6dd;
+  --chart-8: #f08bb0;
+  --chart-9: #c99a6e;
+  --chart-10: #9ea3b5;
+  --chart-other: #8087a0;
+  --chart-on: #131726;
+}
+
+/* Controls: one row on a phone. The period button, the four views (icons only
+   under 768px), Filters. Filters drops to a second row only when it cannot fit. */
+.rp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.rp-period-button,
+.rp-filter-button {
+  padding: 0 var(--s2);
+  font-size: 13px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.rp-period-button {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-filter-button {
+  flex: none;
+  margin-left: auto;
+}
+
+.rp-views {
+  flex: none;
+  margin-bottom: 0;
+}
+
+.rp-views button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  width: 40px;
+  padding: 0;
+  font-size: 14px;
+}
+
+.rp-view-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.rp-view-label {
+  display: none;
+}
+
+/* A short list of choices in a popover (period, comparison). */
+.rp-menu {
+  display: grid;
+}
+
+.rp-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: var(--control);
+  padding: 0 var(--s2);
+  background: none;
+  border: 0;
+  border-bottom: 1px dashed var(--line-strong);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rp-menu-item:hover {
+  color: var(--blue);
+}
+
+.rp-menu-item.is-selected {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.rp-menu-item.is-selected::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  background: var(--red);
+}
+
+/* Hide chips and the Compare button: square, hollow when off, filled when on. */
+.rp-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+
+.rp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: var(--control);
+  padding: var(--s1) var(--s3);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rp-toggle:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.rp-toggle.is-on {
+  background: var(--blue-fill);
+  border-color: var(--blue-fill);
+  color: var(--on-fill);
+}
+
+.rp-toggle-box {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+}
+
+.rp-toggle.is-on .rp-toggle-box {
+  background: currentColor;
+}
+
+.rp-compare-button {
+  flex: none;
+  margin-left: auto;
+}
+
+/* Summary figure */
+.rp-summary {
+  margin-top: var(--s3);
+}
+
+.rp-total-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1) var(--s3);
+}
+
+.rp-hidden-note,
+.rp-compare-total {
+  margin-top: var(--s1);
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.rp-hidden-note {
+  font-weight: 700;
+}
+
+.rp-compare-total {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--s3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* More spending is vermilion with ▲, less is blue with ▼: the arrow and the sign say it without the colour. */
+.rp-delta {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rp-delta--up,
+.rp-delta--new {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.rp-delta--down {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.rp-delta--same {
+  color: var(--muted);
+}
+
+.rp-total {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.rp-total-label {
+  color: var(--muted);
+  font: 500 11.5px/1.2 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.rp-total strong {
+  font: 800 26px/1.15 var(--wide);
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-summary .hint {
+  margin-top: var(--s1);
+}
+
+/* The view */
+.rp-view {
+  margin-top: var(--s3);
+  padding-top: var(--s2);
+  border-top: 1px dashed var(--line-strong);
+}
+
+.rp-figure {
+  position: relative;
+  margin-top: var(--s2);
+}
+
+.rp-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 auto;
+  overflow: visible;
+  font-family: var(--mono);
+}
+
+.rp-donut {
+  max-width: 380px;
+}
+
+.rp-wide-chart {
+  max-width: 720px;
+}
+
+.rp-mark {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rp-mark--pick {
+  cursor: pointer;
+}
+
+.rp-mark:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+}
+
+.rp-hit {
+  fill: transparent;
+}
+
+g.rp-mark:hover > .rp-hit,
+g.rp-mark:focus-visible > .rp-hit {
+  fill: var(--tint);
+}
+
+.rp-slice,
+.rp-block {
+  stroke: var(--slip);
+  stroke-width: 1.5;
+  transition: opacity .2s ease;
+}
+
+.rp-slice:hover,
+.rp-mark:hover > .rp-block {
+  opacity: .82;
+}
+
+.rp-chart-icon {
+  color: var(--ink);
+  fill: var(--ink);
+}
+
+.rp-centre-title,
+.rp-centre-note,
+.rp-axis-text {
+  fill: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: .06em;
+}
+
+.rp-centre-title {
+  text-transform: uppercase;
+}
+
+.rp-centre-amount {
+  fill: var(--ink);
+  font-weight: 700;
+}
+
+.rp-axis-text {
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.rp-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.rp-baseline {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.rp-line {
+  fill: none;
+  stroke-linejoin: miter;
+}
+
+.rp-line--spent {
+  stroke: var(--blue);
+  stroke-width: 2;
+}
+
+.rp-line--budget {
+  stroke: var(--ink);
+  stroke-width: 1.25;
+  stroke-dasharray: 5 4;
+}
+
+.rp-line--reference {
+  stroke: var(--muted);
+  stroke-width: 1.25;
+  stroke-dasharray: 2 4;
+  opacity: .75;
+}
+
+.rp-reference-dot {
+  fill: var(--muted);
+  opacity: .75;
+}
+
+/* Paired bars: the period solid, the comparison faint with a dashed edge. */
+.rp-bar--before {
+  fill-opacity: .22;
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+
+.rp-pair-name {
+  fill: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rp-pair-amount {
+  fill: var(--ink);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-pair-amount--before {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.rp-point {
+  fill: var(--blue);
+  stroke: var(--slip);
+  stroke-width: 1.5;
+}
+
+.rp-point--over {
+  fill: var(--red);
+}
+
+.rp-subblock {
+  fill: none;
+  stroke: var(--chart-on);
+  stroke-width: 1;
+  stroke-opacity: .45;
+  pointer-events: none;
+}
+
+.rp-block-name,
+.rp-block-amount,
+.rp-block-icon {
+  fill: var(--chart-on);
+  color: var(--chart-on);
+  pointer-events: none;
+}
+
+.rp-block-name {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rp-block-amount {
+  font-size: 10.5px;
+}
+
+/* Tooltip: placed by createChartTip(), always inside the figure. */
+.rp-tip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 2px;
+  max-width: min(240px, 100%);
+  padding: var(--s2) var(--s3);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 12.5px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.rp-tip[hidden] {
+  display: none;
+}
+
+/* Breadcrumb, legend chips, trend key */
+.rp-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.rp-crumbs .btn-text {
+  color: var(--blue);
+}
+
+.rp-crumb-here {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 700;
+}
+
+.rp-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.rp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: var(--control);
+  padding: 0 var(--s3);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: line-through;
+  transition: color .2s ease, border-color .2s ease;
+}
+
+.rp-chip .rp-swatch {
+  opacity: .25;
+  transition: opacity .2s ease;
+}
+
+.rp-chip.is-on {
+  border-color: var(--ink);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.rp-chip.is-on .rp-swatch {
+  opacity: 1;
+}
+
+.rp-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+}
+
+.rp-trend-pot {
+  max-width: 360px;
+  margin-bottom: var(--s2);
+}
+
+.rp-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.rp-key li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.rp-key-mark {
+  flex: none;
+  width: 9px;
+  height: 9px;
+}
+
+.rp-key-mark--spent {
+  background: var(--blue);
+}
+
+.rp-key-mark--budget {
+  width: 16px;
+  height: 0;
+  border-top: 2px dashed var(--ink);
+}
+
+.rp-key-mark--reference {
+  width: 16px;
+  height: 0;
+  border-top: 2px dotted var(--muted);
+}
+
+.rp-key-mark--before {
+  width: 14px;
+  background: var(--tint);
+  border: 1px dashed var(--ink);
+}
+
+.rp-key-mark--over {
+  background: var(--red);
+  transform: rotate(45deg);
+}
+
+.rp-under {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0 var(--s4);
+}
+
+.rp-under .hint {
+  flex: 1 1 240px;
+}
+
+.rp-table-toggle {
+  margin-left: auto;
+}
+
+.rp-empty a,
+.rp-missing a {
+  color: var(--blue);
+}
+
+.rp-empty a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control);
+}
+
+.rp-missing {
+  margin-top: var(--s5);
+  border-left-color: var(--red);
+}
+
+/* Table fallback */
+.rp-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.rp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-table caption {
+  padding-bottom: var(--s2);
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.rp-table th,
+.rp-table td {
+  padding: var(--s2) var(--s3) var(--s2) 0;
+  border-bottom: 1px dashed var(--line-strong);
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.rp-table thead th {
+  border-bottom: 1px solid var(--ink);
+  color: var(--muted);
+  font-size: 11.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.rp-table .num {
+  padding-right: 0;
+  padding-left: var(--s3);
+  text-align: right;
+}
+
+/* Ranked list: colour, name, share, amount, and a thin bar underneath. */
+.rp-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rp-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto 12px;
+  align-items: center;
+  gap: 0 var(--s2);
+  width: 100%;
+  min-height: var(--control);
+  padding: var(--s2) 0 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px dashed var(--line-strong);
+  color: inherit;
+  font: inherit;
+  font-size: 14.5px;
+  text-align: left;
+}
+
+.rp-row--pick {
+  cursor: pointer;
+}
+
+.rp-row--pick:hover .rp-row-name {
+  color: var(--blue);
+}
+
+.rp-row-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.rp-row-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-row-share {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.rp-row-amount {
+  min-width: 8ch;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.rp-row-compare {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 2 / -1;
+  justify-content: flex-end;
+  gap: 0 var(--s3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rp-row-before {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-row-next {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+.rp-row-bar {
+  grid-column: 1 / -1;
+  height: 3px;
+  margin-top: var(--s2);
+  background: var(--line);
+}
+
+.rp-row-bar > span {
+  display: block;
+  height: 100%;
+  transform-origin: left center;
+}
+
+.rp-month .rp-list,
+.rp-month .btn-secondary {
+  margin-top: var(--s3);
+}
+
+.rp-filter-form {
+  min-width: min(320px, 100%);
+}
+
+.rp-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  margin-top: var(--s3);
+}
+
+.rp-filter-actions .btn-primary {
+  margin-top: 0;
+}
+
+/* Motion: about 200ms, and none at all when the system asks for less. */
+@media (prefers-reduced-motion: no-preference) {
+  .rp-enter {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: rp-enter .2s ease-out both;
+  }
+
+  .rp-grow {
+    transform-box: fill-box;
+    transform-origin: center bottom;
+    animation: rp-grow .2s ease-out both;
+  }
+
+  .rp-row-bar > span {
+    animation: rp-widen .2s ease-out both;
+  }
+
+  .rp-widen {
+    transform-box: fill-box;
+    transform-origin: left center;
+    animation: rp-widen .2s ease-out both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-slice,
+  .rp-block,
+  .rp-chip,
+  .rp-chip .rp-swatch {
+    transition: none;
+  }
+}
+
+@keyframes rp-enter {
+  from { opacity: 0; transform: scale(.86); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes rp-grow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+@keyframes rp-widen {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (min-width: 768px) {
+  .rp-controls {
+    gap: var(--s3);
+  }
+
+  .rp-period-button,
+  .rp-filter-button {
+    padding: 0 var(--s4);
+    font-size: 14px;
+  }
+
+  .rp-views button {
+    width: auto;
+    padding: 0 var(--s3);
+  }
+
+  .rp-view-label {
+    display: inline;
+  }
+
+  .rp-toggle {
+    font-size: 13px;
+  }
+}
+
+@media print {
+  .rp-controls,
+  .rp-compare-button,
+  .rp-table-toggle,
+  .rp-tip {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Settings → Sync
+   -------------------------------------------------------------------------- */
+
+.sync-status {
+  margin: 0 0 var(--s3);
+  padding: var(--s2) var(--s3);
+  border-left: 3px solid var(--blue);
+  background: var(--tint);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.sync-status[data-kind="off"],
+.sync-status[data-kind="offline"] {
+  border-left-color: var(--line-strong);
+  color: var(--muted);
+}
+
+.sync-status[data-kind="conflict"],
+.sync-status[data-kind="error"],
+.sync-status[data-kind="choose"] {
+  border-left-color: var(--red);
+}
+
+.sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  margin: var(--s3) 0;
+}
+
+.sync-conflict {
+  margin: var(--s3) 0;
+  padding: var(--s3);
+  border: 1px solid var(--line-strong);
+  background: var(--slip);
+}
+
+.sync-conflict-title {
+  margin: 0 0 var(--s2);
+  font-size: 14px;
+}
+
+.sync-versions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s3);
+}
+
+@media (min-width: 768px) {
+  .sync-versions {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.sync-version {
+  min-width: 0;
+  padding-left: var(--s3);
+  border-left: 2px solid var(--line);
+}
+
+.sync-version h4 {
+  margin: 0 0 var(--s1, 4px);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.sync-line {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sync-line-label {
+  color: var(--muted);
+}
+
+.sync-line.is-different {
+  color: var(--blue);
+  font-weight: 600;
+}
