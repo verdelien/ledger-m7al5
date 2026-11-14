@@ -17,6 +17,7 @@ import { buildTransferForm } from './transfer.js';
 import { transferParts, hasSourceFee } from '../transfer-logic.js';
 import { activeTemplates, templatePrefill } from '../templates-logic.js';
 import { templateAmountLabel } from './quick-add-settings.js';
+import { buildDueToConfirm } from './recurring.js';
 import { saveRefund, deleteRefund, refundedSoFar, canRefundHere, suggestedSettled } from '../refund-logic.js';
 
 const RECENT_LIMIT = 40;
@@ -522,7 +523,8 @@ function netAmount(state, entry) {
 }
 
 function buildRecentList(state, today) {
-  const wrap = el('div', { class: 'recent' }, sectionTitle('Today and recent'));
+  // Recurring payments waiting for a yes or no come first.
+  const wrap = el('div', { class: 'recent' }, buildDueToConfirm(state, today), sectionTitle('Today and recent'));
 
   // Newest first. Refunds are folded into their purchase, not listed alone.
   const rows = state.entries

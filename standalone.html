@@ -3603,6 +3603,20 @@ g.rp-mark:focus-visible > .rp-hit {
     overflow-x: visible;
   }
 }
+
+/* Today: recurring payments waiting to be confirmed */
+.due {
+  margin-bottom: var(--s5);
+}
+
+.due-item {
+  padding-bottom: var(--s2);
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.due-item .list-row {
+  border-bottom: 0;
+}
 </style>
 </head>
 <body>
@@ -5446,6 +5460,247 @@ function templatePrefill(s, t) {
     account: t.account && s.accounts.some(a => a.id === t.account) ? t.account : null,
     note: t.note || ''
   };
+}
+
+// ---- recurring-logic.js ----
+// Recurring payments: rent, bills, subscriptions and regular income.
+// Pure functions over the ledger state; nothing here touches the page.
+//
+// A rule (`state.schedules`, the shape the previous version also reads):
+//   { id, name, start, end, frequency, interval, anchor, holidays, autoPost, archived, entry, versions }
+// `versions` is the price history: [{ effectiveDate, entry }]. The version in
+// force on a date is the latest one whose effectiveDate is on or before it.
+// An entry written for a due date has the ID `scheduled:<ruleId>:<date>` and
+// `schedule: ruleId`. It is posted straight away when the rule posts
+// automatically, otherwise planned until the user confirms or skips it.
+//
+// Card-repayment rules (`rule.repayment`) work out their amount from the card
+// balance. They are left to the previous version: never posted or changed here.
+
+
+
+
+
+const RECURRING_FREQUENCIES = ['once', 'weekly', 'monthly', 'yearly'];
+const RECURRING_ANCHORS = ['day', 'first_monday', 'last_working_day'];
+
+const isRepaymentRule = rule => Boolean(rule?.repayment);
+const scheduledEntryId = (rule, date) => `scheduled:${rule.id}:${date}`;
+const inClosedQuarter = (s, date) => Boolean(s.settings.closedQuarters?.includes(quarter(date)));
+
+/** The entry template in force on `date`: the latest version on or before it, else `rule.entry`. */
+function versionOn(rule, date) {
+  const version = (rule.versions || [])
+    .filter(v => v.effectiveDate <= date)
+    .sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate))
+    .at(-1);
+  return version?.entry || rule.entry;
+}
+
+/**
+ * Cancel operations for a rule's planned entries that should no longer happen:
+ * all of them when the rule is paused, otherwise those whose date the rule no
+ * longer falls on. Posted entries are never touched.
+ */
+function staleScheduleOperations(s, rule, today) {
+  const planned = s.entries.filter(e => e.schedule === rule.id && e.status === 'planned' && !inClosedQuarter(s, e.date));
+  if (!planned.length) return [];
+  let allowed = new Set();
+  if (!rule.archived) {
+    const horizon = planned.reduce((last, e) => (e.date > last ? e.date : last), today);
+    allowed = new Set(horizon >= rule.start ? occurrences(rule, rule.start, horizon) : []);
+  }
+  return planned
+    // An entry confirmed onto another day keeps its original due date in its ID.
+    .filter(e => !allowed.has(e.date) && !allowed.has(e.id.slice(scheduledEntryId(rule, '').length)))
+    .map(e => ({
+      table: 'entries',
+      record: { ...e, status: 'cancelled', amountConfirmed: false, cancelReason: rule.archived ? 'paused' : 'rule_changed' }
+    }));
+}
+
+/**
+ * Write the entries that have fallen due, up to and including `today`.
+ * Returns { state, posted, planned }: the IDs written as posted (rules that
+ * post automatically) and as planned (rules that ask first). A date that
+ * already has an entry of any status, or whose entry the user deleted, is
+ * left alone. Returns the same state object when nothing changes.
+ */
+function postDueSchedules(s, today) {
+  if (!validDate(today)) throw Error('Today\'s date is not valid.');
+  const operations = [], posted = [], planned = [];
+  const existing = new Set(s.entries.map(e => e.id));
+  const deleted = new Set(s.trash.filter(t => t.table === 'entries' && t.record).map(t => t.record.id));
+  for (const rule of s.schedules) {
+    if (isRepaymentRule(rule)) continue;
+    operations.push(...staleScheduleOperations(s, rule, today));
+    if (rule.archived || rule.start > today) continue;
+    for (const date of occurrences(rule, rule.start, today)) {
+      const id = scheduledEntryId(rule, date);
+      // A closed budget quarter cannot take new entries; that date is passed over.
+      if (existing.has(id) || deleted.has(id) || inClosedQuarter(s, date)) continue;
+      const status = rule.autoPost ? 'posted' : 'planned';
+      operations.push({ table: 'entries', record: { ...versionOn(rule, date), id, date, status, schedule: rule.id } });
+      (rule.autoPost ? posted : planned).push(id);
+    }
+  }
+  if (!operations.length) return { state: s, posted, planned };
+  return { state: commitBatch(s, operations), posted, planned };
+}
+
+/**
+ * Add a recurring payment, or change one (`fields.id` set). Throws a readable
+ * error when something is missing. A change applies from `effectiveDate`:
+ * entries already posted keep their amount; planned entries from that date on
+ * are brought up to date so a confirmation shows the new figure.
+ */
+function saveSchedule(s, fields, today) {
+  const old = fields.id ? s.schedules.find(r => r.id === fields.id) : null;
+  if (fields.id && !old) throw Error('That recurring payment no longer exists.');
+  if (isRepaymentRule(old)) throw Error('Card repayments are managed in the previous version.');
+  const name = String(fields.name ?? '').trim();
+  if (!name) throw Error('Give the recurring payment a name.');
+  if (name.length > 150) throw Error('Use a name of at most 150 characters.');
+  const kind = fields.kind === 'income' ? 'income' : 'expense';
+  const category = s.categories.find(c => c.id === fields.category);
+  if (!category || category.kind !== kind || (category.archived && old?.entry.category !== category.id)) {
+    throw Error(kind === 'income' ? 'Choose an income category.' : 'Choose an expense category.');
+  }
+  const currency = String(fields.currency ?? '');
+  if (!s.settings.activeCurrencies.includes(currency)) throw Error('Choose one of your active currencies.');
+  const precision = digits(currency);
+  let minor;
+  try { minor = parseAmount(String(fields.amount ?? ''), currency); } catch {
+    throw Error(`Enter an amount above zero with at most ${precision} decimal places.`);
+  }
+  const accountId = fields.account || '';
+  const account = accountId ? s.accounts.find(a => a.id === accountId) : null;
+  if (accountId && !account) throw Error('Choose an account, or leave it unset.');
+  if (account && (account.currency !== currency || account.precision !== precision)) {
+    throw Error(`${account.name} is in ${account.currency}. Use that currency, or choose another account.`);
+  }
+  const frequency = String(fields.frequency ?? '');
+  if (!RECURRING_FREQUENCIES.includes(frequency)) throw Error('Choose how often it repeats.');
+  const interval = Number(fields.interval ?? 1);
+  if (!Number.isInteger(interval) || interval < 1 || interval > 120) throw Error('Repeat every 1 to 120 periods.');
+  // "Last working day" and "First Monday" only mean something for months and years.
+  const anchor = ['monthly', 'yearly'].includes(frequency) && RECURRING_ANCHORS.includes(fields.anchor) ? fields.anchor : 'day';
+  const start = String(fields.start ?? '');
+  if (!validDate(start)) throw Error('Choose the first date.');
+  const end = String(fields.end ?? '');
+  if (end && !validDate(end)) throw Error('Choose a last date, or leave it empty.');
+  if (end && end < start) throw Error('The last date cannot be before the first date.');
+  const effectiveDate = old ? String(fields.effectiveDate || today) : start;
+  if (!validDate(effectiveDate)) throw Error('Choose the date the new amount applies from.');
+
+  const entry = {
+    kind, status: 'planned', date: start, minor, currency, precision, category: category.id,
+    pot: category.pot || '', account: accountId, trip: '', tags: '', note: name, ledger: 'active'
+  };
+  const versions = old
+    ? [...(old.versions || [{ effectiveDate: old.start, entry: old.entry }]).filter(v => v.effectiveDate !== effectiveDate), { effectiveDate, entry }]
+    : [{ effectiveDate: start, entry }];
+  const rule = {
+    ...(old || {}),
+    id: old?.id || uid(), name, start, end, frequency, interval, anchor, holidays: old?.holidays || [],
+    autoPost: fields.autoPost !== false, archived: old?.archived || false, entry, versions
+  };
+  const operations = [{ table: 'schedules', record: rule }];
+  if (old) {
+    // Planned entries from the change date on take the terms now in force on their date.
+    for (const e of s.entries) {
+      if (e.schedule !== rule.id || e.status !== 'planned' || e.date < effectiveDate || inClosedQuarter(s, e.date)) continue;
+      const v = versionOn(rule, e.date);
+      const updated = {
+        ...e, kind: v.kind, minor: v.minor, currency: v.currency, precision: v.precision,
+        category: v.category, pot: v.pot, account: v.account, note: v.note
+      };
+      if (JSON.stringify(updated) !== JSON.stringify(e)) operations.push({ table: 'entries', record: updated });
+    }
+  }
+  return commitBatch(s, operations);
+}
+
+function setScheduleArchived(s, id, archived) {
+  const rule = s.schedules.find(r => r.id === id);
+  if (!rule) throw Error('That recurring payment no longer exists.');
+  if (isRepaymentRule(rule)) throw Error('Card repayments are managed in the previous version.');
+  if (Boolean(rule.archived) === archived) return s;
+  const next = { ...rule, archived };
+  return commitBatch(s, [{ table: 'schedules', record: next }, ...(archived ? staleScheduleOperations(s, next, rule.start) : [])]);
+}
+
+/** Stop a rule. Its waiting (planned) entries are cancelled; posted ones stay. */
+function pauseSchedule(s, id) { return setScheduleArchived(s, id, true); }
+
+/** Start a paused rule again. Dates cancelled while it was paused stay cancelled. */
+function resumeSchedule(s, id) { return setScheduleArchived(s, id, false); }
+
+/** Entries waiting for a yes or no: planned, from a recurring rule, due today or earlier. Oldest first. */
+function dueToConfirm(s, today) {
+  return s.entries
+    .filter(e => e.schedule && e.status === 'planned' && e.ledger === 'active' && e.date <= today
+      && !isRepaymentRule(s.schedules.find(r => r.id === e.schedule)))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+}
+
+function waitingScheduledEntry(s, id) {
+  const entry = s.entries.find(e => e.id === id);
+  if (!entry || !entry.schedule || entry.status !== 'planned') throw Error('That payment is no longer waiting to be confirmed.');
+  const rule = s.schedules.find(r => r.id === entry.schedule);
+  if (isRepaymentRule(rule)) throw Error('Card repayments are managed in the previous version.');
+  return { entry, rule };
+}
+
+/**
+ * Post a waiting entry. `minor` changes the amount (same currency); `date`
+ * moves it, no later than `today` and no earlier than the rule's first date.
+ */
+function confirmDue(s, id, { minor, date, today } = {}) {
+  const { entry, rule } = waitingScheduledEntry(s, id);
+  const amount = minor ?? entry.minor;
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw Error('Enter an amount above zero.');
+  const day = date ?? entry.date;
+  if (!validDate(day)) throw Error('Choose the date it was paid.');
+  if (today && day > today) throw Error('The date cannot be in the future.');
+  if (rule && day < rule.start) throw Error('The date cannot be before the first date of this recurring payment.');
+  return commit(s, 'entries', { ...entry, minor: amount, date: day, status: 'posted' });
+}
+
+/** Say a waiting entry did not happen. It is cancelled and never written again. */
+function skipDue(s, id) {
+  const { entry } = waitingScheduledEntry(s, id);
+  return commit(s, 'entries', { ...entry, status: 'cancelled', cancelReason: 'skipped' });
+}
+
+/** The next date a rule falls due on or after `today`, or null (paused, ended, or a one-off already past). */
+function nextDue(s, rule, today) {
+  if (rule.archived) return null;
+  const from = today > rule.start ? today : rule.start;
+  const interval = rule.interval || 1;
+  // Far enough ahead to hold at least one more date, whatever the rhythm.
+  const horizon = rule.frequency === 'weekly'
+    ? addMonths(from, Math.ceil(interval / 4) + 1)
+    : addMonths(from, interval * (rule.frequency === 'yearly' ? 12 : 1) + 1);
+  return occurrences(rule, from, horizon)[0] || null;
+}
+
+const recurringOrdinal = n => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+const RECURRING_WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const RECURRING_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** A rule's rhythm in words: "monthly on the 1st", "every 2 weeks on Fridays", "monthly on the last working day". */
+function frequencyWords(rule) {
+  const [, month, day] = rule.start.split('-').map(Number);
+  const n = rule.interval || 1;
+  if (rule.frequency === 'once') return `once on ${day} ${RECURRING_MONTHS[month - 1]} ${rule.start.slice(0, 4)}`;
+  const unit = { weekly: 'week', monthly: 'month', yearly: 'year' }[rule.frequency];
+  const rhythm = n === 1 ? rule.frequency : `every ${n} ${unit}s`;
+  if (rule.frequency === 'weekly') return `${rhythm} on ${RECURRING_WEEKDAYS[new Date(rule.start + 'T12:00:00Z').getUTCDay()]}s`;
+  const inMonth = rule.frequency === 'yearly' ? ` of ${RECURRING_MONTHS[month - 1]}` : '';
+  if (rule.anchor === 'last_working_day') return `${rhythm} on the last working day${inMonth}`;
+  if (rule.anchor === 'first_monday') return `${rhythm} on the first Monday${inMonth}`;
+  return rule.frequency === 'yearly' ? `${rhythm} on ${day} ${RECURRING_MONTHS[month - 1]}` : `${rhythm} on the ${recurringOrdinal(day)}`;
 }
 
 // ---- reports-view.js ----
@@ -8401,8 +8656,135 @@ function buildTransferForm(state, today, editing, { onSaved = () => {}, onCancel
       editing && el('button', { type: 'button', class: 'btn-secondary', text: 'Cancel', onclick: () => onCancel() })));
 }
 
+// ---- ui/recurring.js ----
+// Recurring payments on open, and the "Due to confirm" block on Today.
+
+
+
+
+
+
+
+/** "Posted 2 recurring payments: Rent (Sun 1 Nov) £950.00, Phone (Thu 5 Nov) £12.00." At most three are named. */
+function recurringPostedText(state, posted, today) {
+  const parts = [];
+  if (posted.length) {
+    const entries = posted.map(id => state.entries.find(e => e.id === id)).filter(Boolean);
+    const named = entries.slice(0, 3).map(e => `${e.note || 'Payment'} (${formatDay(e.date)}) ${formatMoney(e.minor, e.currency, e.precision)}`);
+    const more = entries.length - named.length;
+    parts.push(`Posted ${entries.length} recurring payment${entries.length === 1 ? '' : 's'}: ${named.join(', ')}${more > 0 ? ` and ${more} more` : ''}.`);
+  }
+  const waiting = dueToConfirm(state, today).length;
+  if (waiting) parts.push(`${waiting} to confirm on Today.`);
+  return parts.join(' ');
+}
+
+/**
+ * Write the recurring payments that have fallen due since the last visit.
+ * A failure is shown as a toast and never blocks the ledger.
+ */
+async function runRecurringOnOpen() {
+  try {
+    const today = todayIso();
+    const { state, posted, planned } = postDueSchedules(ledger.state, today);
+    if (state === ledger.state) return;
+    await saveLedger(state);
+    if (posted.length || planned.length) showToast(recurringPostedText(state, posted, today), null, 10000);
+  } catch (error) {
+    showToast(errorMessage(error));
+  }
+}
+
+/** Today: recurring payments waiting for a yes or no. Null when there are none. */
+function buildDueToConfirm(state, today) {
+  const due = dueToConfirm(state, today);
+  if (!due.length) return null;
+  return el('div', { class: 'due' },
+    sectionTitle('Due to confirm'),
+    due.map(entry => {
+      const rule = state.schedules.find(r => r.id === entry.schedule);
+      const name = rule?.name || entry.note || 'Recurring payment';
+      const account = state.accounts.find(a => a.id === entry.account)?.name;
+      const signed = entry.kind === 'income' ? entry.minor : -entry.minor;
+      return el('div', { class: 'due-item' },
+        el('div', { class: 'list-row' },
+          el('span', { class: 'entry-text' },
+            el('span', { class: 'entry-title', text: name }),
+            el('span', { class: 'entry-meta', text: [formatDay(entry.date), account].filter(Boolean).join(' · ') })),
+          el('span', {
+            class: 'entry-amount' + (entry.kind === 'income' ? ' is-income' : ''),
+            text: formatMoney(signed, entry.currency, entry.precision, { signed: true })
+          })),
+        el('div', { class: 'entry-actions' },
+          el('button', {
+            type: 'button', class: 'btn-primary btn-small', text: 'Confirm', 'aria-label': `Confirm ${name}, ${formatDay(entry.date)}`,
+            onclick: event => openConfirmDueSheet(event.currentTarget, entry, name, rule)
+          }),
+          skipDueButton(entry, name)));
+    }));
+}
+
+/** Two presses: the first asks, the second skips this date. */
+function skipDueButton(entry, name) {
+  let armed = false;
+  const button = el('button', { type: 'button', class: 'btn-text', text: 'Skip', 'aria-label': `Skip ${name}, ${formatDay(entry.date)}` });
+  button.addEventListener('blur', () => { armed = false; button.textContent = 'Skip'; button.classList.remove('is-armed'); });
+  button.addEventListener('click', async () => {
+    if (!armed) {
+      armed = true;
+      button.textContent = 'Press again to skip';
+      button.classList.add('is-armed');
+      return;
+    }
+    try {
+      await saveLedger(skipDue(ledger.state, entry.id));
+      showToast(`${name} skipped for ${formatDay(entry.date)}.`);
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  });
+  return button;
+}
+
+/** The small sheet behind Confirm: amount and date, both ready to accept as they are. */
+function openConfirmDueSheet(anchor, entry, name, rule) {
+  const today = todayIso();
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const amount = el('input', {
+    id: 'due-amount', type: 'text', inputMode: 'decimal', autocomplete: 'off', value: plainAmount(entry.minor, entry.precision)
+  });
+  const date = el('input', { id: 'due-date', type: 'date', min: rule?.start || null, max: today, value: entry.date });
+  const dueField = (control, label) => el('div', { class: 'field' }, el('label', { for: control.id, text: label }), control);
+
+  const form = el('form', {
+    class: 'pot-sheet', novalidate: true,
+    onsubmit: async event => {
+      event.preventDefault();
+      try {
+        if (!amount.value.trim()) throw Error('Enter the amount.');
+        const next = confirmDue(ledger.state, entry.id, { minor: parseAmount(amount.value, entry.currency), date: date.value, today });
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast(`${name} recorded.`);
+      } catch (error) {
+        errorBox.textContent = errorMessage(error);
+        errorBox.hidden = false;
+        if (!form.isConnected) showToast(errorMessage(error));
+      }
+    }
+  },
+    dueField(amount, `Amount (${entry.currency})`),
+    dueField(date, entry.kind === 'income' ? 'Date received' : 'Date paid'),
+    errorBox,
+    el('div', { class: 'entry-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: 'Confirm' })));
+
+  openPopover({ anchor, label: `Confirm ${name}`, role: 'dialog', content: form });
+}
+
 // ---- ui/today.js ----
 // Today: quick add for an expense, an income or a transfer, and the recent entries with net amounts.
+
 
 
 
@@ -8926,7 +9308,8 @@ function netAmount(state, entry) {
 }
 
 function buildRecentList(state, today) {
-  const wrap = el('div', { class: 'recent' }, sectionTitle('Today and recent'));
+  // Recurring payments waiting for a yes or no come first.
+  const wrap = el('div', { class: 'recent' }, buildDueToConfirm(state, today), sectionTitle('Today and recent'));
 
   // Newest first. Refunds are folded into their purchase, not listed alone.
   const rows = state.entries
@@ -10335,6 +10718,198 @@ function quickAddForm(state, template, rerender) {
       template && el('button', { type: 'button', class: 'btn-text', text: 'Cancel', onclick: () => { quickAddView.editingId = ''; rerender(); } })));
 }
 
+// ---- ui/recurring-settings.js ----
+// Settings → Recurring: rent, bills, subscriptions and regular income.
+
+
+
+
+
+
+
+// View state kept between re-renders: the rule being edited.
+const recurringView = { editingId: '' };
+
+/** "£950.00 monthly on the 1st" for the terms in force today. */
+function recurringSummary(rule, today) {
+  const entry = versionOn(rule, today);
+  return `${formatMoney(entry.minor, entry.currency, entry.precision)} ${frequencyWords(rule)}`;
+}
+
+function buildRecurringSettings(rerender) {
+  const state = ledger.state;
+  const today = todayIso();
+  const byName = (a, b) => Number(Boolean(a.archived)) - Number(Boolean(b.archived)) || a.name.localeCompare(b.name);
+  const rules = state.schedules.filter(r => !r.repayment).sort(byName);
+  const repayments = state.schedules.filter(r => r.repayment && !r.archived).sort(byName);
+
+  /** Pause or resume, then record anything that is now due. */
+  async function toggle(rule) {
+    try {
+      const changed = rule.archived ? resumeSchedule(ledger.state, rule.id) : pauseSchedule(ledger.state, rule.id);
+      const { state: next, posted } = postDueSchedules(changed, today);
+      if (recurringView.editingId === rule.id) recurringView.editingId = '';
+      await saveLedger(next);
+      rerender();
+      showToast(rule.archived
+        ? ['Resumed.', recurringPostedText(next, posted, today)].filter(Boolean).join(' ')
+        : 'Paused. Nothing more is recorded until you resume it.');
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  }
+
+  const row = rule => {
+    const editing = recurringView.editingId === rule.id;
+    const next = nextDue(state, rule, today);
+    const meta = [
+      recurringSummary(rule, today),
+      rule.archived ? null : next ? `next ${formatDay(next)}` : 'no more dates',
+      rule.autoPost ? 'posts automatically' : 'asks to confirm'
+    ].filter(Boolean).join(' · ');
+    return el('li', { class: 'ed-item' },
+      el('div', { class: 'ed-row' },
+        el('span', { class: 'ed-name' },
+          el('span', { class: 'ed-name-text' }, el('strong', { text: rule.name }), rule.archived && ' ', rule.archived && el('span', { class: 'tag-fixed', text: 'Paused' })),
+          el('span', { class: 'ed-meta', text: meta })),
+        el('div', { class: 'ed-actions' },
+          el('button', {
+            type: 'button', class: 'btn-text', text: 'Edit', 'aria-label': `Edit ${rule.name}`,
+            'aria-expanded': String(editing), 'data-focus': `rec-edit:${rule.id}`,
+            onclick: () => { recurringView.editingId = editing ? '' : rule.id; rerender(); }
+          }),
+          el('button', {
+            type: 'button', class: 'btn-text', text: rule.archived ? 'Resume' : 'Pause',
+            'aria-label': `${rule.archived ? 'Resume' : 'Pause'} ${rule.name}`, 'data-focus': `rec-pause:${rule.id}`,
+            onclick: () => toggle(rule)
+          }))),
+      editing && recurringForm(state, rule, rerender));
+  };
+
+  return el('div', {},
+    el('p', { class: 'note', text: 'Payments and income that repeat. When one falls due it is recorded the next time you open the app, or waits on Today for you to confirm.' }),
+    rules.length
+      ? el('ul', { class: 'plain-list ed-list' }, rules.map(row))
+      : el('p', { class: 'empty', text: 'No recurring payments. Add rent, a bill or a subscription below.' }),
+    el('details', { class: 'fold' },
+      el('summary', { text: 'Add a recurring payment' }),
+      recurringForm(state, null, rerender)),
+    repayments.length > 0 && el('div', {},
+      el('p', { class: 'note', text: 'Card repayments' }),
+      el('ul', { class: 'plain-list ed-list' }, repayments.map(rule => el('li', { class: 'ed-item' },
+        el('div', { class: 'ed-row' },
+          el('span', { class: 'ed-name' },
+            el('span', { class: 'ed-name-text' }, el('strong', { text: rule.name })),
+            el('span', { class: 'ed-meta', text: `${frequencyWords(rule)} · Managed in the previous version` })),
+          el('div', { class: 'ed-actions' },
+            el('a', { class: 'btn-text', href: LEGACY_URL, text: 'Open', 'aria-label': `Open the previous version to change ${rule.name}` })))))))
+  );
+}
+
+/** The form for a new rule (`rule` null) or an existing one. */
+function recurringForm(state, rule, rerender) {
+  const today = todayIso();
+  const old = rule?.entry;
+  const key = rule ? rule.id.replace(/[^a-z0-9-]/gi, '-') : 'new';
+  const option = (value, text) => el('option', { value, text });
+  const select = (name, options, value) => {
+    const control = el('select', { id: `rec-${name}-${key}` }, options.map(([v, text]) => option(v, text)));
+    control.value = value;
+    return control;
+  };
+  const input = (name, props) => el('input', { id: `rec-${name}-${key}`, ...props });
+
+  const name = input('name', { type: 'text', maxLength: 150, value: rule?.name || '' });
+  const kind = select('kind', [['expense', 'Expense'], ['income', 'Income']], old?.kind === 'income' ? 'income' : 'expense');
+  const amount = input('amount', { type: 'text', inputMode: 'decimal', autocomplete: 'off', value: old ? plainAmount(old.minor, old.precision) : '' });
+  const code = old?.currency || state.settings.reportingCurrency;
+  const currency = select('currency', [...new Set([...state.settings.activeCurrencies, code])].map(c => [c, c]), code);
+
+  const category = el('select', { id: `rec-category-${key}` });
+  const fillCategories = chosen => {
+    const list = state.categories.filter(c => c.kind === kind.value && (!c.archived || c.id === old?.category))
+      .map(c => ({ id: c.id, path: categoryPath(state, c.id).replaceAll(' / ', ' › ') }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    category.replaceChildren(option('', 'Choose a category'), ...list.map(c => option(c.id, c.path)));
+    category.value = list.some(c => c.id === chosen) ? chosen : '';
+  };
+  fillCategories(old?.category || '');
+
+  const accountLabel = el('label', { for: `rec-account-${key}` });
+  const account = select('account',
+    [['', 'Not set'], ...state.accounts.filter(a => !a.archived || a.id === old?.account).map(a => [a.id, `${a.name} (${a.currency})`])],
+    old?.account || '');
+
+  const frequency = select('frequency', [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['yearly', 'Yearly']], rule?.frequency || 'monthly');
+  const interval = input('interval', { type: 'number', inputMode: 'numeric', min: 1, max: 120, step: 1, value: String(rule?.interval || 1) });
+  const anchor = select('anchor', [['day', 'Same day each time'], ['last_working_day', 'Last working day'], ['first_monday', 'First Monday']], rule?.anchor || 'day');
+  const start = input('start', { type: 'date', value: rule?.start || today });
+  const end = input('end', { type: 'date', value: rule?.end || '' });
+  const autoPost = select('autopost', [['yes', 'Post automatically'], ['no', 'Ask me to confirm']], rule?.autoPost === false ? 'no' : 'yes');
+  const effective = rule && input('effective', { type: 'date', value: today });
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+
+  const field = (control, label, hint) => el('div', { class: 'field' },
+    typeof label === 'string' ? el('label', { for: control.id, text: label }) : label,
+    control, hint && el('p', { class: 'hint', text: hint }));
+  const intervalField = field(interval, 'Every');
+  const anchorField = field(anchor, 'On');
+  const unitHint = el('p', { class: 'hint' });
+  intervalField.append(unitHint);
+
+  /** Show only what applies to the chosen kind and rhythm. */
+  function sync() {
+    accountLabel.textContent = kind.value === 'income' ? 'Paid into (optional)' : 'Paid from (optional)';
+    intervalField.hidden = frequency.value === 'once';
+    anchorField.hidden = !['monthly', 'yearly'].includes(frequency.value);
+    unitHint.textContent = { weekly: 'weeks', monthly: 'months', yearly: 'years' }[frequency.value] || '';
+  }
+  kind.addEventListener('change', () => { fillCategories(category.value); sync(); });
+  frequency.addEventListener('change', sync);
+  sync();
+
+  async function submit(event) {
+    event.preventDefault();
+    try {
+      const saved = saveSchedule(ledger.state, {
+        id: rule?.id, name: name.value, kind: kind.value, amount: amount.value, currency: currency.value,
+        category: category.value, account: account.value, frequency: frequency.value,
+        interval: frequency.value === 'once' ? 1 : Number(interval.value), anchor: anchor.value,
+        start: start.value, end: end.value, autoPost: autoPost.value === 'yes',
+        effectiveDate: effective ? effective.value || today : start.value
+      }, today);
+      // Anything already due under the new terms is recorded straight away.
+      const { state: next, posted } = postDueSchedules(saved, today);
+      recurringView.editingId = '';
+      await saveLedger(next);
+      rerender();
+      showToast([rule ? 'Recurring payment saved.' : 'Recurring payment added.', recurringPostedText(next, posted, today)].filter(Boolean).join(' '), null, 10000);
+    } catch (error) {
+      errorBox.textContent = errorMessage(error);
+      errorBox.hidden = false;
+    }
+  }
+
+  return el('form', { class: rule ? 'ed-edit' : 'fold-body', onsubmit: submit, novalidate: true },
+    field(name, 'Name'),
+    field(kind, 'Kind'),
+    field(amount, 'Amount'),
+    field(currency, 'Currency'),
+    field(category, 'Category'),
+    field(account, accountLabel),
+    field(frequency, 'Repeats'),
+    intervalField,
+    anchorField,
+    field(start, 'First date', rule ? null : 'Dates from here up to today are recorded when you add it.'),
+    field(end, 'Last date (optional)'),
+    field(autoPost, 'When due'),
+    effective && field(effective, 'New amount applies from', 'Past payments keep their amount.'),
+    errorBox,
+    el('div', { class: 'ed-edit-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: rule ? 'Save' : 'Add recurring payment' }),
+      rule && el('button', { type: 'button', class: 'btn-text', text: 'Cancel', onclick: () => { recurringView.editingId = ''; rerender(); } })));
+}
+
 // ---- ui/pots-settings.js ----
 // Settings → Pots (add, rename, icon, archive, and the rollover switch per
 // pot) and the payday flow part of Settings → Payday.
@@ -10638,9 +11213,10 @@ function buildPaydayFlowSettings() {
 
 // ---- ui/settings.js ----
 // Settings, one section at a time: accounts, currencies,
-// categories, pots, payday, estimates, quick add, sync, and the way back to the previous version.
+// categories, pots, payday, estimates, quick add, recurring, sync, and the way back to the previous version.
 // Each section has its own address (#settings/estimates), so Back and a
 // reload return to it.
+
 
 
 
@@ -10675,10 +11251,11 @@ const SECTIONS = [
   { id: 'payday', label: 'Payday', build: () => [buildPaydaySettings(), sectionTitle('Payday flow'), buildPaydayFlowSettings()] },
   { id: 'estimates', label: 'Estimates', build: rerender => [buildEstimates(rerender)] },
   { id: 'quick-add', label: 'Quick add', build: rerender => [buildQuickAddSettings(rerender)] },
+  { id: 'recurring', label: 'Recurring', title: 'Recurring payments', build: rerender => [buildRecurringSettings(rerender)] },
   { id: 'sync', label: 'Sync', title: 'Google Sheets sync', build: rerender => [buildSync(rerender)] },
   {
     id: 'data', label: 'Data', title: 'Previous version', build: () => [
-      el('p', { class: 'note', text: 'Recurring payments, transfers and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
+      el('p', { class: 'note', text: 'Card repayments and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
       el('a', { class: 'btn-secondary', href: LEGACY_URL, text: 'Open previous version' }),
       el('p', { class: 'note data-note', text: 'Your records stay in this browser on this device. They are sent only to your own Google Sheet, and only after you connect one under Sync.' })
     ]
@@ -12560,6 +13137,7 @@ function startShell() {
 
 
 
+
 initThemeToggle(document.getElementById('theme-toggle'));
 enhanceSelects();
 
@@ -12569,6 +13147,8 @@ try {
   // Opt-in pots only: unused funding past its months moves to savings, with Undo.
   // (The earlier calendar-quarter sweep is not run from this interface.)
   await runRolloverOnOpen();
+  // Recurring payments that fell due since the last visit (card repayments stay with the previous version).
+  await runRecurringOnOpen();
   // Google Sheets sync, if this device is connected. A failure here never blocks the ledger.
   startSync().catch(() => {});
 } catch (error) {

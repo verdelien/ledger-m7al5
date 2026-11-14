@@ -3579,3 +3579,17 @@ g.rp-mark:focus-visible > .rp-hit {
     overflow-x: visible;
   }
 }
+
+/* Today: recurring payments waiting to be confirmed */
+.due {
+  margin-bottom: var(--s5);
+}
+
+.due-item {
+  padding-bottom: var(--s2);
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.due-item .list-row {
+  border-bottom: 0;
+}

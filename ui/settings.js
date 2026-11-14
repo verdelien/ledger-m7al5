@@ -1,5 +1,5 @@
 // Settings, one section at a time: accounts, currencies,
-// categories, pots, payday, estimates, quick add, sync, and the way back to the previous version.
+// categories, pots, payday, estimates, quick add, recurring, sync, and the way back to the previous version.
 // Each section has its own address (#settings/estimates), so Back and a
 // reload return to it.
 
@@ -12,6 +12,7 @@ import { buildCategoryEditor, iconField } from './category-editor.js';
 import { buildCurrencies } from './currencies.js';
 import { buildPaydaySettings, buildEstimates } from './forecast-settings.js';
 import { buildQuickAddSettings } from './quick-add-settings.js';
+import { buildRecurringSettings } from './recurring-settings.js';
 import { buildPotsSettings, buildPaydayFlowSettings } from './pots-settings.js';
 import { accountIconNode } from './pixel-icons.js';
 import { buildSync } from './sync.js';
@@ -36,10 +37,11 @@ const SECTIONS = [
   { id: 'payday', label: 'Payday', build: () => [buildPaydaySettings(), sectionTitle('Payday flow'), buildPaydayFlowSettings()] },
   { id: 'estimates', label: 'Estimates', build: rerender => [buildEstimates(rerender)] },
   { id: 'quick-add', label: 'Quick add', build: rerender => [buildQuickAddSettings(rerender)] },
+  { id: 'recurring', label: 'Recurring', title: 'Recurring payments', build: rerender => [buildRecurringSettings(rerender)] },
   { id: 'sync', label: 'Sync', title: 'Google Sheets sync', build: rerender => [buildSync(rerender)] },
   {
     id: 'data', label: 'Data', title: 'Previous version', build: () => [
-      el('p', { class: 'note', text: 'Recurring payments, transfers and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
+      el('p', { class: 'note', text: 'Card repayments and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
       el('a', { class: 'btn-secondary', href: LEGACY_URL, text: 'Open previous version' }),
       el('p', { class: 'note data-note', text: 'Your records stay in this browser on this device. They are sent only to your own Google Sheet, and only after you connect one under Sync.' })
     ]

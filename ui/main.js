@@ -6,6 +6,7 @@ import { enhanceSelects } from './select.js';
 import { openLedger } from './ledger.js';
 import { startShell } from './shell.js';
 import { runRolloverOnOpen } from './pots.js';
+import { runRecurringOnOpen } from './recurring.js';
 import { startSync } from './sync.js';
 
 initThemeToggle(document.getElementById('theme-toggle'));
@@ -17,6 +18,8 @@ try {
   // Opt-in pots only: unused funding past its months moves to savings, with Undo.
   // (The earlier calendar-quarter sweep is not run from this interface.)
   await runRolloverOnOpen();
+  // Recurring payments that fell due since the last visit (card repayments stay with the previous version).
+  await runRecurringOnOpen();
   // Google Sheets sync, if this device is connected. A failure here never blocks the ledger.
   startSync().catch(() => {});
 } catch (error) {
