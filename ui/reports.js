@@ -324,8 +324,12 @@ function buildHideToggles({ groups, rerender }) {
           reportsUi.drill = '';
           saveReportChoice();
           rerender();
-        }
-      }, el('span', { class: 'rp-toggle-box', 'aria-hidden': 'true' }), el('span', { text: group.label }));
+        },
+        'aria-label': group.label
+      }, el('span', { class: 'rp-toggle-box', 'aria-hidden': 'true' }),
+        // On a phone only "Hide <pot>" shows, so both chips fit on one row.
+        el('span', { text: `Hide ${group.title}` }),
+        el('span', { class: 'rp-toggle-names', text: group.label.slice(`Hide ${group.title}`.length) }));
     }));
 }
 

@@ -37,7 +37,7 @@ const SECTIONS = [
   { id: 'sync', label: 'Sync', title: 'Google Sheets sync', build: rerender => [buildSync(rerender)] },
   {
     id: 'data', label: 'Data', title: 'Previous version', build: () => [
-      el('p', { class: 'note', text: 'Recurring payments, transfers, refunds and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
+      el('p', { class: 'note', text: 'Recurring payments, transfers and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
       el('a', { class: 'btn-secondary', href: LEGACY_URL, text: 'Open previous version' }),
       el('p', { class: 'note data-note', text: 'Your records stay in this browser on this device. They are sent only to your own Google Sheet, and only after you connect one under Sync.' })
     ]

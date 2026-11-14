@@ -1111,6 +1111,7 @@ input::placeholder {
 .detail-line {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: var(--s3);
   padding: var(--s1) 0;
   font-size: 13.5px;
@@ -1590,6 +1591,77 @@ button.ed-name:hover .ed-name-text {
   content: "✓";
   margin-left: auto;
   color: var(--blue);
+}
+
+/* A select's own list is replaced by a popover list (ui/select.js). The
+   native control stays in the page, hidden; the button stands in for it. */
+.select-native {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-height: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.select-button {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  min-width: 0;
+  height: var(--control);
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1.5px solid var(--line-strong);
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.select-button[hidden] {
+  display: none;
+}
+
+.select-button-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-button .caret {
+  color: var(--muted);
+}
+
+.select-button:focus-visible,
+.select-button[aria-expanded="true"] {
+  border-bottom-color: var(--blue);
+}
+
+.select-button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.pop-group {
+  padding: var(--s2);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.pop-option[aria-disabled="true"] {
+  opacity: .4;
+  cursor: default;
 }
 
 /* --------------------------------------------------------------------------
@@ -2501,7 +2573,7 @@ button.ed-name:hover .ed-name-text {
   }
 }
 
-/* Today: the Expense | Income switch above the add form */
+/* Today: the Expense | Income | Transfer switch above the add form */
 .entry-kind {
   display: flex;
   margin-bottom: var(--s3);
@@ -2701,6 +2773,12 @@ button.ed-name:hover .ed-name-text {
 
 .rp-toggle.is-on .rp-toggle-box {
   background: currentColor;
+}
+
+/* The bracketed category names only from 768px; the button's label keeps them. */
+.rp-toggle-names {
+  display: none;
+  white-space: pre-wrap;
 }
 
 .rp-compare-button {
@@ -3361,6 +3439,10 @@ g.rp-mark:focus-visible > .rp-hit {
   .rp-toggle {
     font-size: 13px;
   }
+
+  .rp-toggle-names {
+    display: inline;
+  }
 }
 
 @media print {
@@ -3887,6 +3969,11 @@ function validateState(s){
  }
  for(const e of s.entries.filter(e=>e.kind==='expense')){const refunded=s.entries.filter(r=>r.kind==='refund'&&r.original===e.id).reduce((n,r)=>n+BigInt(r.minor),0n);if(refunded>BigInt(e.minor))throw Error('Refunds exceed the original purchase.');if(e.friend){const own=s.entries.filter(r=>r.kind==='refund'&&r.original===e.id).reduce((n,r)=>n+BigInt(r.personalMinor??r.minor),0n);if(own>BigInt(e.personalMinor))throw Error('Refunds exceed your original personal share.');if(e.sharedTotal!=null){const merchant=s.entries.filter(r=>r.kind==='refund'&&r.original===e.id).reduce((n,r)=>n+BigInt(r.merchantRefund??r.minor),0n);if(merchant>BigInt(e.sharedTotal))throw Error('Merchant refunds exceed the original shared payment.');}const theirs=refunded-own;if(theirs>BigInt(e.minor-e.personalMinor))throw Error('Refunds exceed the friend’s original share.');}}
  for(const e of s.entries){if(e.feeFor){ref('entries',e.feeFor);const transfer=find('entries',e.feeFor);if(transfer.kind!=='transfer'||e.group!==transfer.group||e.account!==transfer.account||e.currency!==transfer.currency||e.date!==transfer.date||e.status!==transfer.status)throw Error('A transfer fee must match its source transfer.');}if(e.kind==='transfer'&&e.totalDebit!=null){integer(e.totalDebit,true);const fees=s.entries.filter(f=>f.feeFor===e.id).reduce((n,f)=>n+BigInt(f.minor),0n);if(BigInt(e.minor)+fees!==BigInt(e.totalDebit))throw Error('Transfer principal and included fee must equal the total debit.');}}
+ // A fee taken from what a transfer delivered (an ATM or exchange charge): an expense on the receiving account.
+ for(const fee of s.entries.filter(e=>e.feeOnReceived)){
+  const transfer=find('entries',fee.feeOnReceived),destination=transfer&&find('accounts',transfer.toAccount);
+  if(!transfer||transfer.kind!=='transfer'||!destination||fee.kind!=='expense'||fee.group!==transfer.id||fee.account!==transfer.toAccount||fee.currency!==destination.currency||fee.precision!==destination.precision||fee.date!==transfer.date||fee.status!==transfer.status)throw Error('A fee taken from a transfer must match the receiving account and date.');
+ }
  for(const a of s.allocations){date(a.date);if(a.salary){ref('entries',a.salary);const income=find('entries',a.salary);if(income.kind!=='income'||income.status!=='posted'||income.ledger!=='active')throw Error('Salary funding needs a posted income entry.');const allocated=s.allocations.filter(row=>row.salary===a.salary).reduce((n,row)=>n+BigInt(row.minor),0n);if(allocated>BigInt(income.minor))throw Error('Salary allocations exceed the recorded income.');}ref('pots',a.from);ref('pots',a.to);if(!a.to||a.from===a.to)throw Error('Choose a different destination pot.');integer(a.minor,true);const target=find('pots',a.to);if(a.from){const source=find('pots',a.from);if(source.currency!==target.currency||source.precision!==target.precision)throw Error('Pot moves currently require matching currencies.');}}
  for(const table of ['accounts','categories','pots','templates','schedules','trips','wishlist','friends','caps'])for(const r of s[table])if(typeof r.name!=='string'||!r.name.trim()||r.name.length>150)throw Error(`A ${table} record needs a name of at most 150 characters.`);
  for(const r of s.templates){ref('accounts',r.account);ref('categories',r.category);ref('pots',r.pot);}
@@ -4922,6 +5009,248 @@ function undoRollover(s, ids) {
     .filter(a => ids.includes(a.id) && a.id.startsWith('rollover:'))
     .map(record => ({ table: 'allocations', record, action: 'delete' }));
   return operations.length ? commitBatch(s, operations) : s;
+}
+
+// ---- transfer-logic.js ----
+// Transfers between two accounts, with an optional fee taken from the amount received
+// (an ATM or exchange charge that reduced what arrived).
+//
+// The transfer records the amount sent (in the from-account's currency) and the gross
+// amount received (in the to-account's currency, before the fee). The fee is a linked
+// expense on the receiving account, so the account's balance goes up by the net amount,
+// the fee appears in reports, and nothing is counted twice.
+
+
+
+const SOURCE_FEE_MESSAGE = 'This transfer has a fee taken from the amount sent. Edit it in the previous version.';
+
+/** True when the transfer has the older kind of fee, charged on top at the source. */
+function hasSourceFee(state, transfer) {
+  return transfer.totalDebit != null || state.entries.some(entry => entry.feeFor === transfer.id);
+}
+
+/** The fee taken from the amount received (or null) and what actually arrived. */
+function transferParts(state, transfer) {
+  const fee = state.entries.find(entry => entry.feeOnReceived === transfer.id) || null;
+  return { fee, receivedNet: BigInt(transfer.receivedMinor) - BigInt(fee ? fee.minor : 0) };
+}
+
+/**
+ * Save a transfer and its fee as one change. Returns the new, validated state.
+ *   transfer     the transfer record (id, account, toAccount, minor, date, status, note…)
+ *   receivedNet  what actually arrived, in the destination currency's minor units
+ *   fee          the fee taken from the amount received, same units; 0 for none
+ *   feeCategory  the expense category for the fee; needed only when there is a fee
+ */
+function saveTransfer(state, { transfer, receivedNet, fee = 0, feeCategory = '' }) {
+  if (!Number.isSafeInteger(fee) || fee < 0) throw Error('The fee cannot be negative.');
+  if (!Number.isSafeInteger(receivedNet) || receivedNet <= 0) throw Error('Enter the amount received.');
+  if (!Number.isSafeInteger(receivedNet + fee)) throw Error('Amount must be within the supported range.');
+
+  const from = state.accounts.find(account => account.id === transfer.account);
+  const to = state.accounts.find(account => account.id === transfer.toAccount);
+  if (!transfer.account || !transfer.toAccount || !from || !to) {
+    throw Error('Choose the account the money leaves and the account it arrives in.');
+  }
+  if (from.id === to.id) throw Error('Choose two different accounts.');
+  if (hasSourceFee(state, transfer)) throw Error(SOURCE_FEE_MESSAGE);
+
+  const id = transfer.id;
+  const old = state.entries.find(entry => entry.id === id);
+  const oldFee = state.entries.find(entry => entry.feeOnReceived === id);
+
+  const record = {
+    ...transfer,
+    kind: 'transfer',
+    currency: from.currency,
+    precision: from.precision,
+    receivedMinor: receivedNet + fee
+  };
+  // The amount sent is always in the from-account's own currency.
+  delete record.settledMinor; delete record.settledCurrency; delete record.settledPrecision;
+  delete record.settledEstimate;
+  // A changed amount makes an older reporting-currency value stale.
+  if (old && (old.minor !== record.minor || old.currency !== record.currency)) {
+    delete record.reportingMinor; delete record.reportingCurrency; delete record.reportingPrecision;
+  }
+  if (fee > 0) record.group = id;
+  else if (record.group === id) delete record.group;
+
+  const operations = [{ table: 'entries', record }];
+  if (fee > 0) {
+    const category = state.categories.find(c => c.id === feeCategory && c.kind === 'expense');
+    if (!category) throw Error('Choose an expense category for the fee.');
+    operations.push({
+      table: 'entries',
+      record: {
+        id: oldFee?.id || 'rfee:' + id,
+        kind: 'expense',
+        feeOnReceived: id,
+        group: id,
+        status: record.status,
+        date: record.date,
+        minor: fee,
+        currency: to.currency,
+        precision: to.precision,
+        account: to.id,
+        category: category.id,
+        pot: category.pot || '',
+        trip: '',
+        tags: 'fee',
+        note: 'Fee taken from the amount received',
+        ledger: 'active'
+      }
+    });
+  } else if (oldFee) {
+    operations.push({ table: 'entries', record: oldFee, action: 'delete' });
+  }
+  return commitBatch(state, operations);
+}
+
+// ---- refund-logic.js ----
+// Refunds against a purchase.
+//
+// A refund is its own record that points at the purchase (`original`). It copies the
+// purchase's currency, account, category and pot, so the money returns to the same
+// account and the same pot. A purchase can have several part refunds; together they can
+// never be more than the purchase.
+//
+// Purchases shared with a friend, and fees that belong to a transfer, have their own
+// rules and are still refunded in the previous version.
+
+
+
+
+
+/** Today's date on this device, as YYYY-MM-DD. */
+function localToday() {
+  const now = new Date();
+  const pad = number => String(number).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/** '85.00' for 8500 at precision 2. Plain fixed decimals, for messages. */
+function fixedAmount(minor, precision) {
+  const digits = BigInt(minor).toString().padStart(precision + 1, '0');
+  return precision ? `${digits.slice(0, -precision)}.${digits.slice(-precision)}` : digits;
+}
+
+/** `part` of `whole`, applied to `amount`, rounded half away from zero. */
+function proportion(amount, part, whole) {
+  return Number(divideRounded(BigInt(amount) * BigInt(part), BigInt(whole)));
+}
+
+/**
+ * How much of a purchase has been refunded already, in the purchase currency's minor
+ * units. `exceptId` leaves one refund out: the one being edited.
+ */
+function refundedSoFar(state, purchase, exceptId = '') {
+  return state.entries
+    .filter(entry => entry.kind === 'refund' && entry.original === purchase.id
+      && entry.status !== 'cancelled' && entry.id !== exceptId)
+    .reduce((sum, entry) => sum + BigInt(entry.minor), 0n);
+}
+
+/** True when this purchase's refunds can be recorded in this version. */
+function canRefundHere(state, purchase) {
+  return Boolean(purchase)
+    && purchase.kind === 'expense'
+    && purchase.status === 'posted'
+    && purchase.ledger === 'active'
+    && !purchase.friend
+    && !purchase.feeOnReceived
+    && !purchase.feeFor;
+}
+
+/**
+ * The likely amount credited to the account for a refund of `minor`, when the account
+ * is in a different currency from the purchase: the same share of the original charge.
+ * Null when the purchase was paid in the account's own currency.
+ */
+function suggestedSettled(purchase, minor) {
+  if (purchase.settledMinor == null) return null;
+  if (!Number.isSafeInteger(minor) || minor <= 0 || !(purchase.minor > 0)) return null;
+  return proportion(purchase.settledMinor, minor, purchase.minor);
+}
+
+/**
+ * Add a refund, or change an existing one. Returns the new, validated state.
+ *   purchaseId       the purchase being refunded
+ *   id               the refund to change; empty for a new refund
+ *   minor            the refund, in the purchase currency's minor units
+ *   date             YYYY-MM-DD; from the purchase date up to today
+ *   note             optional text
+ *   settledMinor     what the account was credited, in the account currency's minor
+ *                    units. Only for a purchase in another currency; left out, it is
+ *                    estimated from the original charge.
+ *   settledEstimate  true when a given settledMinor is itself an estimate
+ *   today            the latest date allowed; defaults to today on this device
+ */
+function saveRefund(state, { purchaseId, id = '', minor, date, note = '', settledMinor, settledEstimate, today = localToday() }) {
+  const purchase = state.entries.find(entry => entry.id === purchaseId);
+  if (!purchase) throw Error('The purchase for this refund was not found.');
+  if (!canRefundHere(state, purchase)) throw Error('Refunds for this purchase are recorded in the previous version.');
+  if (id && !state.entries.some(entry => entry.id === id && entry.kind === 'refund' && entry.original === purchase.id)) {
+    throw Error('That refund was not found.');
+  }
+
+  if (!Number.isSafeInteger(minor) || minor <= 0) throw Error('Enter the refund amount.');
+  const left = BigInt(purchase.minor) - refundedSoFar(state, purchase, id);
+  if (left <= 0n) throw Error('This purchase is already fully refunded.');
+  if (BigInt(minor) > left) {
+    throw Error(`The most left to refund is ${fixedAmount(left, purchase.precision)} ${purchase.currency}.`);
+  }
+
+  if (typeof date !== 'string' || !validDate(date)) throw Error('Choose the refund date.');
+  if (date < purchase.date) throw Error('A refund cannot be dated before the purchase.');
+  if (date > today) throw Error('A refund cannot be dated in the future.');
+
+  // Start from the purchase so the currency, account, category, pot, trip and tags match,
+  // then remove what belongs to the purchase alone.
+  const record = {
+    ...purchase,
+    id: id || uid(),
+    kind: 'refund',
+    original: purchase.id,
+    minor,
+    date,
+    status: 'posted',
+    note: String(note || '').trim()
+  };
+  for (const key of ['settledMinor', 'settledCurrency', 'settledPrecision', 'settledEstimate',
+    'reportingMinor', 'reportingCurrency', 'reportingPrecision', 'splits', 'group', 'feeFor']) {
+    delete record[key];
+  }
+
+  // The account is in another currency: record what it was credited.
+  if (purchase.settledMinor != null && purchase.settledCurrency) {
+    record.settledCurrency = purchase.settledCurrency;
+    record.settledPrecision = purchase.settledPrecision;
+    if (settledMinor == null) {
+      record.settledMinor = proportion(purchase.settledMinor, minor, purchase.minor);
+      record.settledEstimate = true;
+    } else {
+      if (!Number.isSafeInteger(settledMinor) || settledMinor <= 0) throw Error('Enter the amount credited to the account.');
+      record.settledMinor = settledMinor;
+      if (settledEstimate === true) record.settledEstimate = true;
+    }
+  }
+
+  // Keep the same share of the purchase's reporting value, so reports show the net.
+  if (purchase.reportingMinor != null && purchase.reportingCurrency) {
+    record.reportingMinor = proportion(purchase.reportingMinor, minor, purchase.minor);
+    record.reportingCurrency = purchase.reportingCurrency;
+    record.reportingPrecision = purchase.reportingPrecision;
+  }
+
+  return commitBatch(state, [{ table: 'entries', record }]);
+}
+
+/** Remove one refund. Returns the new, validated state. */
+function deleteRefund(state, id) {
+  const record = state.entries.find(entry => entry.id === id);
+  if (!record || record.kind !== 'refund') throw Error('That refund was not found.');
+  return commitBatch(state, [{ table: 'entries', record, action: 'delete' }]);
 }
 
 // ---- reports-view.js ----
@@ -6432,14 +6761,14 @@ const PIXEL_ICONS = {
   badge: ['.....##.....', '....#..#....', '############', '#..........#', '#.###..###.#', '#.###......#', '#.###.####.#', '#..........#', '#.###.###..#', '#..........#', '############', '............'],
   box: ['............', '..########..', '.#........#.', '############', '#..........#', '#....##....#', '#....##....#', '#..........#', '#..........#', '#..........#', '############', '............'],
   people: ['..##....##..', '.####..####.', '.####..####.', '..##....##..', '............', '.####..####.', '######.#####', '######.#####', '######.#####', '######.#####', '............', '............'],
-  palette: ['...######...', '.##......##.', '#..##......#', '#..##..##..#', '#......##..#', '#.##.......#', '#.##...##..#', '#......##..#', '.#...##....#', '..#.#..#..#.', '...#....##..', '............'],
+  palette: ['...######...', '..#......##.', '.#.##.##...#', '#..##.##...#', '#..........#', '#.##....###.', '#.##...#....', '#......#....', '.#......###.', '..#........#', '...########.', '............'],
   laptop: ['............', '.##########.', '.#........#.', '.#........#.', '.#........#.', '.#........#.', '.##########.', '............', '############', '############', '............', '............'],
-  lipstick: ['.....##.....', '....###.....', '....####....', '....####....', '...######...', '...######...', '...#....#...', '...######...', '..########..', '..########..', '..########..', '..########..'],
+  lipstick: ['......#.....', '.....##.....', '....###.....', '....####....', '....####....', '....####....', '...######...', '...######...', '............', '..########..', '..########..', '..########..'],
   car: ['............', '............', '...######...', '..#..#...#..', '.#...#....#.', '############', '############', '#.########.#', '############', '.##......##.', '.##......##.', '............'],
   cross: ['............', '....####....', '....####....', '....####....', '############', '############', '############', '############', '....####....', '....####....', '....####....', '............'],
   leaf: ['.........###', '......######', '....###...##', '...##....###', '..##....##.#', '..#....##..#', '.##...##..##', '.#...##..##.', '.#..##.###..', '..###.##....', '.##.........', '##..........'],
   chat: ['............', '.##########.', '############', '##........##', '##.#.#.#.###', '##........##', '############', '.##########.', '...###......', '..##........', '.#..........', '............'],
-  cap: ['............', '.....##.....', '...######...', '.##########.', '############', '.##########.', '...######.#.', '...######.#.', '...######.#.', '.........###', '.........###', '............'],
+  cap: ['............', '............', '....####....', '.##########.', '############', '.##########.', '..#######.#.', '..#######.#.', '..#######.#.', '...#####.###', '.........###', '............'],
   passport: ['.#########..', '.##########.', '.##......##.', '.##.####.##.', '.##.#..#.##.', '.##.#..#.##.', '.##.####.##.', '.##......##.', '.##.####.##.', '.##......##.', '.##########.', '..#########.'],
   shield: ['.##########.', '##........##', '##........##', '##...##...##', '##..####..##', '##...##...##', '.##......##.', '.##......##.', '..##....##..', '...##..##...', '....####....', '.....##.....'],
   bed: ['............', '............', '#...........', '#...........', '#.##........', '#.##.######.', '############', '############', '#..........#', '#..........#', '............', '............'],
@@ -7033,6 +7362,234 @@ function openPopover({ anchor, content, label, role = null, wide = false, onClos
   return handle;
 }
 
+// ---- ui/select.js ----
+// Every <select> in the new interface keeps working as before (value, change
+// events, disabled), but its native list is replaced by the app's own popover
+// list. The select stays in the page, hidden, as the source of truth; a button
+// placed right after it shows the chosen option and opens the list.
+
+
+
+
+const buttons = new WeakMap(); // select → its button
+let rootObserver = null;
+let labelClicksInstalled = false;
+
+/** Enhance every select under `root`, now and whenever one is added later. */
+function enhanceSelects(root = document.body) {
+  if (!root) return;
+  scan(root);
+  installLabelClicks();
+  if (rootObserver) return;
+  rootObserver = new MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        // A select taken out on its own takes its button with it.
+        if (node.nodeType === 1 && node.matches('select') && !node.isConnected) buttons.get(node)?.remove();
+      }
+      for (const node of record.addedNodes) {
+        if (node.nodeType === 1) scan(node);
+      }
+    }
+  });
+  rootObserver.observe(root, { childList: true, subtree: true });
+}
+
+function scan(node) {
+  const selects = node.matches?.('select') ? [node] : [];
+  if (node.querySelectorAll) selects.push(...node.querySelectorAll('select'));
+  for (const select of selects) {
+    if (select.closest('.legacy')) continue;
+    if (select.hasAttribute('data-enhanced')) {
+      // Moved elsewhere: bring its button along.
+      const button = buttons.get(select);
+      if (button && select.isConnected && select.nextSibling !== button) select.after(button);
+      continue;
+    }
+    enhance(select);
+  }
+}
+
+/** A click on a label focuses the button of the select it belongs to. */
+function installLabelClicks() {
+  if (labelClicksInstalled) return;
+  labelClicksInstalled = true;
+  document.addEventListener('click', event => {
+    const label = event.target.closest?.('label[for]');
+    if (!label) return;
+    const target = document.getElementById(label.htmlFor);
+    const button = target && buttons.get(target);
+    if (!button) return;
+    event.preventDefault();
+    if (!button.disabled) button.focus();
+  });
+}
+
+function labelOf(select) {
+  const own = select.getAttribute('aria-label');
+  if (own) return own.trim();
+  if (select.id) {
+    const label = document.querySelector(`label[for="${CSS.escape(select.id)}"]`);
+    if (label) return label.textContent.trim();
+  }
+  const wrapping = select.closest('label');
+  if (wrapping) {
+    // The label's own words, without the select's options or the button's text.
+    const copy = wrapping.cloneNode(true);
+    copy.querySelectorAll('select, .select-button').forEach(node => node.remove());
+    return copy.textContent.trim();
+  }
+  return '';
+}
+
+function enhance(select) {
+  if (select.multiple) return; // a list box, not a dropdown
+  select.setAttribute('data-enhanced', '');
+
+  // Keep the place the select held in its row before it is hidden.
+  const inlineWidth = select.style.width;
+  let flex = null;
+  if (select.isConnected) {
+    const computed = getComputedStyle(select);
+    if (computed.flexGrow !== '0' || select.style.flex) {
+      flex = `${computed.flexGrow} ${computed.flexShrink} ${computed.flexBasis}`;
+    }
+  }
+
+  const text = el('span', { class: 'select-button-text' });
+  const button = el('button', {
+    type: 'button', class: 'select-button',
+    'aria-haspopup': 'listbox', 'aria-expanded': 'false'
+  }, text, el('span', { class: 'caret', 'aria-hidden': 'true', text: '▾' }));
+  if (inlineWidth) button.style.width = inlineWidth;
+  if (flex) button.style.flex = flex;
+  buttons.set(select, button);
+
+  let popover = null;
+
+  function refresh() {
+    const chosen = select.options[select.selectedIndex];
+    const value = chosen ? chosen.textContent.trim() : '';
+    const label = labelOf(select);
+    if (text.textContent !== value) text.textContent = value;
+    const name = label ? `${label}: ${value}` : value;
+    if (button.getAttribute('aria-label') !== name) button.setAttribute('aria-label', name);
+    if (button.disabled !== select.disabled) button.disabled = select.disabled;
+    if (button.hidden !== select.hidden) button.hidden = select.hidden;
+    if (select.disabled && popover) closePopover();
+  }
+
+  function choose(option) {
+    const changed = select.selectedIndex !== option.index;
+    closePopover();
+    if (!changed) return;
+    select.selectedIndex = option.index;
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    refresh();
+  }
+
+  function open() {
+    refresh();
+    if (select.disabled) return;
+    const label = labelOf(select);
+    const items = [];   // the choosable rows, in order
+    const byItem = new Map();
+
+    const row = (option, groupDisabled) => {
+      const disabled = option.disabled || groupDisabled;
+      const item = el('li', {
+        role: 'option', tabIndex: -1, class: 'pop-option',
+        'aria-selected': String(option.index === select.selectedIndex),
+        'aria-disabled': disabled ? 'true' : null,
+        'data-value': option.value,
+        onclick: () => { if (!disabled) choose(option); }
+      }, el('strong', { text: option.textContent.trim() || ' ' }));
+      if (!disabled) { items.push(item); byItem.set(item, option); }
+      return item;
+    };
+
+    const rows = [];
+    for (const child of select.children) {
+      if (child.tagName === 'OPTGROUP') {
+        rows.push(el('li', { class: 'pop-group', role: 'presentation', text: child.label }));
+        for (const option of child.children) {
+          if (option.tagName === 'OPTION') rows.push(row(option, child.disabled));
+        }
+      } else if (child.tagName === 'OPTION') rows.push(row(child, false));
+    }
+    const list = el('ul', { class: 'pop-list', role: 'listbox', 'aria-label': label || null }, rows);
+
+    list.addEventListener('keydown', event => {
+      if (!items.length) return;
+      const at = items.indexOf(document.activeElement);
+      let to = -1;
+      if (event.key === 'ArrowDown') to = (at + 1) % items.length;
+      else if (event.key === 'ArrowUp') to = (at - 1 + items.length) % items.length;
+      else if (event.key === 'Home') to = 0;
+      else if (event.key === 'End') to = items.length - 1;
+      else if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        if (at >= 0) choose(byItem.get(items[at]));
+        return;
+      } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        // Typing a character jumps to the next option that starts with it.
+        const letter = event.key.toLowerCase();
+        const order = [...items.slice(at + 1), ...items.slice(0, at + 1)];
+        to = items.indexOf(order.find(item => item.textContent.trim().toLowerCase().startsWith(letter)));
+      }
+      if (to < 0) return;
+      event.preventDefault();
+      items[to].focus();
+    });
+
+    popover = openPopover({
+      anchor: button, content: list, label: label || 'Choose',
+      onClose: () => { popover = null; }
+    });
+    const start = items.find(item => item.getAttribute('aria-selected') === 'true') || items[0];
+    start?.focus();
+  }
+
+  button.addEventListener('click', () => (popover ? closePopover() : open()));
+  button.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    if (!popover) open();
+  });
+
+  // Hide the native control; it stays in the page as the source of truth.
+  select.classList.add('select-native');
+  select.tabIndex = -1;
+  select.setAttribute('aria-hidden', 'true');
+  select.after(button);
+
+  // Stay in step when code sets .value / .selectedIndex directly…
+  for (const name of ['value', 'selectedIndex']) {
+    const native = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, name);
+    if (!native?.set) continue;
+    Object.defineProperty(select, name, {
+      configurable: true,
+      enumerable: native.enumerable,
+      get() { return native.get.call(this); },
+      set(next) { native.set.call(this, next); refresh(); }
+    });
+  }
+  // …when its options or attributes change, and when it changes itself.
+  new MutationObserver(refresh).observe(select, {
+    childList: true, subtree: true, attributes: true, characterData: true
+  });
+  select.addEventListener('change', refresh);
+
+  // Screens restore focus after a redraw by `data-focus`, and may focus the
+  // select itself before this runs: send that focus on to the button.
+  if (select.dataset.focus) button.dataset.focus = select.dataset.focus;
+  select.addEventListener('focus', () => button.focus());
+
+  refresh();
+  if (document.activeElement === select) button.focus();
+}
+
 // ---- ui/accounts-picker.js ----
 // The account picker: currency tabs over a grid of account tiles, built like
 // the category picker. Each tile shows an icon, the name and the balance.
@@ -7056,9 +7613,10 @@ function accountCurrencies(state, accounts) {
  *   currency           → the entry currency; its tab is shown first
  *   today              → balances are shown as of this day
  *   onChange(id)
+ *   chosenLabel        → the words before the chosen account's name (default 'Paid from')
  * Returns { element, getValue(), showCurrency(code) }.
  */
-function createAccountPicker({ getState, getAccounts, value = '', currency = '', today, onChange = () => {} }) {
+function createAccountPicker({ getState, getAccounts, value = '', currency = '', today, onChange = () => {}, chosenLabel = 'Paid from' }) {
   let selected = value;
   let tab = currency; // '' is the "All" tab
   const element = el('div', { class: 'acct-picker' });
@@ -7096,7 +7654,7 @@ function createAccountPicker({ getState, getAccounts, value = '', currency = '',
 
     const chosen = accounts.find(account => account.id === selected);
     element.replaceChildren(...[tabs, grid, el('p', { class: 'cat-chosen' },
-      chosen ? ['Paid from ', el('strong', { text: `${chosen.name} · ${chosen.currency}` })] : 'No account chosen.')].filter(Boolean));
+      chosen ? [chosenLabel + ' ', el('strong', { text: `${chosen.name} · ${chosen.currency}` })] : 'No account chosen.')].filter(Boolean));
 
     if (focusSelector) element.querySelector(focusSelector)?.focus();
   }
@@ -7349,8 +7907,308 @@ async function quietly(action) {
   }
 }
 
+// ---- ui/transfer.js ----
+// Move money between two accounts, with an optional fee taken from what arrived
+// (an ATM or exchange charge).
+
+
+
+
+
+
+
+
+
+
+
+const FEE_CATEGORY_KEY = 'expense-book.fee-category';
+const FEE_HINT = 'Use this for an ATM or exchange charge that reduced what arrived. What you type in Amount received is what actually arrived.';
+
+// Remembered while the page is open, so repeating a transfer is quick.
+const lastUsed = { from: null, to: null };
+
+function rememberedFeeCategory() {
+  try { return localStorage.getItem(FEE_CATEGORY_KEY) || ''; } catch { return ''; }
+}
+function rememberFeeCategory(id) {
+  try { localStorage.setItem(FEE_CATEGORY_KEY, id); } catch { /* private window: nothing to remember */ }
+}
+
+/** A typed fee as minor units; an empty field or zero means no fee. */
+function parseFee(text, currency) {
+  const typed = text.trim();
+  if (!typed || /^0+(?:[.,]0*)?$/.test(typed)) return 0;
+  if (typed.startsWith('-')) throw Error('The fee cannot be negative.');
+  return parseAmount(typed, currency);
+}
+
+/**
+ * The transfer form. `editing` is the transfer being changed, or null for a new one.
+ *   onSaved(record)  called after the transfer is saved
+ *   onCancel()       called by Cancel while editing
+ */
+function buildTransferForm(state, today, editing, { onSaved = () => {}, onCancel = () => {} } = {}) {
+  const offered = current => current.accounts.filter(a => !a.archived || a.id === editing?.account || a.id === editing?.toAccount);
+  const accounts = offered(state);
+  const has = id => accounts.some(a => a.id === id);
+  const parts = editing ? transferParts(state, editing) : null;
+
+  const startFrom = editing ? editing.account
+    : (has(lastUsed.from) && lastUsed.from)
+      || (has(state.settings.defaultAccount) && state.settings.defaultAccount)
+      || accounts.find(a => a.type === 'current' && a.currency === 'GBP')?.id
+      || accounts[0]?.id
+      || '';
+  const startTo = editing ? editing.toAccount
+    : (has(lastUsed.to) && lastUsed.to !== startFrom && lastUsed.to)
+      || accounts.find(a => a.id !== startFrom)?.id
+      || '';
+
+  const caret = () => el('span', { class: 'caret', 'aria-hidden': 'true', text: '▾' });
+  const accountOf = id => ledger.state.accounts.find(a => a.id === id);
+
+  // --- From and To: each a button that opens the account picker.
+  function accountField(id, label, value) {
+    let popover = null;
+    const picker = createAccountPicker({
+      getState: () => ledger.state,
+      getAccounts: offered,
+      value,
+      currency: '', // the "All" tab
+      today,
+      chosenLabel: label,
+      onChange: () => { show(); closePopover(); syncFields(); }
+    });
+    const button = el('button', {
+      type: 'button', id, class: 'paid-button',
+      'aria-haspopup': 'dialog', 'aria-expanded': 'false',
+      onclick: () => {
+        if (popover) return closePopover();
+        popover = openPopover({
+          anchor: button, content: picker.element, label, role: 'dialog', wide: true,
+          onClose: () => { popover = null; }
+        });
+        (picker.element.querySelector('[data-acct][aria-pressed="true"]')
+          || picker.element.querySelector('button'))?.focus();
+      }
+    });
+    function show() {
+      const account = accountOf(picker.getValue());
+      button.replaceChildren(...[
+        account && accountIconNode(account),
+        el('span', { class: 'paid-name', text: account ? account.name : 'Choose an account' }),
+        account && el('span', { class: 'paid-currency', text: account.currency }),
+        caret()
+      ].filter(Boolean));
+    }
+    show();
+    return {
+      account: () => accountOf(picker.getValue()),
+      field: el('div', { class: 'field' }, el('label', { for: id, text: label }), button)
+    };
+  }
+  const from = accountField('transfer-from', 'From', startFrom);
+  const to = accountField('transfer-to', 'To', startTo);
+
+  // --- Amounts
+  const sent = el('input', {
+    id: 'transfer-amount', class: 'amount-input', type: 'text', inputMode: 'decimal',
+    autocomplete: 'off', placeholder: '0.00',
+    value: editing ? plainAmount(editing.minor, editing.precision) : '',
+    oninput: () => syncFields()
+  });
+  const sentLabel = el('label', { for: 'transfer-amount' });
+  const dateInput = el('input', { id: 'transfer-date', type: 'date', 'aria-label': 'Date', value: editing?.date || today });
+
+  // Amount received: only shown when the two accounts hold different currencies.
+  // 'auto'   a live estimate from the default rates, recalculated as the form changes
+  // 'manual' typed by the user, or the amount saved with the transfer being edited
+  const editingDestination = editing && state.accounts.find(a => a.id === editing.toAccount);
+  let receivedState = editing ? 'manual' : 'auto';
+  let receivedFor = null; // the currency the field holds; null until first shown
+  const received = el('input', {
+    id: 'transfer-received', type: 'text', inputMode: 'decimal', autocomplete: 'off',
+    value: parts && editingDestination ? plainAmount(parts.receivedNet, editingDestination.precision) : '',
+    oninput: () => { receivedState = 'manual'; estimateTag.hidden = true; }
+  });
+  const receivedLabelText = el('span');
+  const estimateTag = el('span', { class: 'tag-estimate', text: 'estimate', hidden: true });
+  const receivedField = el('div', { class: 'field', hidden: true },
+    el('label', { for: 'transfer-received' }, receivedLabelText, ' ', estimateTag),
+    received);
+
+  // --- Fee taken from the amount received, and the category it is reported under.
+  const fee = el('input', {
+    id: 'transfer-fee', type: 'text', inputMode: 'decimal', autocomplete: 'off',
+    value: parts?.fee && editingDestination ? plainAmount(parts.fee.minor, editingDestination.precision) : '',
+    oninput: () => syncFields()
+  });
+  const feeLabel = el('label', { for: 'transfer-fee' });
+
+  const expenseCategories = state.categories.filter(c => c.kind === 'expense' && (!c.archived || c.id === parts?.fee?.category));
+  const categoryLabel = category => {
+    const parent = category.parent && state.categories.find(c => c.id === category.parent);
+    return parent ? `${parent.name} › ${category.name}` : category.name;
+  };
+  const isOffered = id => expenseCategories.some(c => c.id === id);
+  const remembered = rememberedFeeCategory();
+  const startCategory = (parts?.fee && isOffered(parts.fee.category) && parts.fee.category)
+    || (isOffered(remembered) && remembered)
+    || expenseCategories.find(c => c.name === 'Admin fees')?.id
+    || expenseCategories[0]?.id
+    || '';
+  const feeCategory = el('select', { id: 'transfer-fee-category' },
+    expenseCategories.map(c => el('option', { value: c.id, text: categoryLabel(c) })));
+  feeCategory.value = startCategory;
+  const feeCategoryField = el('div', { class: 'field', hidden: true },
+    el('label', { for: 'transfer-fee-category', text: 'Fee category' }), feeCategory);
+
+  const note = el('input', { id: 'transfer-note', type: 'text', maxLength: 500, value: editing?.note || '' });
+
+  /** The estimate of what arrives, as text for the field, or '' without an amount or a rate. */
+  function estimateReceived(source, destination) {
+    try {
+      const { reportingCurrency, defaultRates } = ledger.state.settings;
+      const gross = estimateAccountAmount(parseAmount(sent.value, source.currency),
+        { currency: source.currency, precision: source.precision }, destination, reportingCurrency, defaultRates);
+      if (gross == null) return '';
+      let charge = 0;
+      try { charge = parseFee(fee.value, destination.currency); } catch { /* a half-typed fee */ }
+      const net = gross > charge ? gross - charge : gross;
+      return net > 0 ? plainAmount(net, destination.precision) : '';
+    } catch {
+      return ''; // no amount typed yet
+    }
+  }
+
+  /** Labels and the received field follow the two chosen accounts. */
+  function syncFields() {
+    const source = from.account();
+    const destination = to.account();
+    sentLabel.textContent = source ? `Amount sent (${source.currency})` : 'Amount sent';
+    feeLabel.textContent = destination
+      ? `Fee taken from the amount received (optional, ${destination.currency})`
+      : 'Fee taken from the amount received (optional)';
+    feeCategoryField.hidden = !fee.value.trim();
+
+    const needed = !!source && !!destination && source.currency !== destination.currency;
+    receivedField.hidden = !needed;
+    if (!needed) {
+      // Same currency: what is received equals what is sent.
+      received.value = '';
+      receivedState = 'auto';
+      receivedFor = '';
+      return;
+    }
+    receivedLabelText.textContent = `Amount received (${destination.currency})`;
+    if (receivedFor !== null && receivedFor !== destination.currency) {
+      received.value = ''; // it was an amount in another currency
+      receivedState = 'auto';
+    }
+    receivedFor = destination.currency;
+    if (receivedState === 'auto' || !received.value.trim()) {
+      received.value = estimateReceived(source, destination);
+      receivedState = received.value ? 'auto' : 'manual';
+    }
+    estimateTag.hidden = receivedState === 'manual';
+  }
+  syncFields();
+
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const enough = accounts.length >= 2;
+  const saveButton = el('button', {
+    type: 'submit', class: 'btn-primary', text: editing ? 'Save changes' : 'Save transfer'
+  });
+  if (!enough) saveButton.disabled = true;
+
+  /** Read the form. Throws a readable error if something is missing. */
+  function readForm() {
+    const source = from.account();
+    const destination = to.account();
+    if (!source || !destination) throw Error('Choose the account the money leaves and the account it arrives in.');
+    if (source.id === destination.id) throw Error('Choose two different accounts.');
+    if (!sent.value.trim()) throw Error('Enter the amount sent.');
+    const minor = parseAmount(sent.value, source.currency);
+    if (!dateInput.value) throw Error('Choose a date.');
+    const charge = parseFee(fee.value, destination.currency);
+
+    let receivedNet;
+    if (source.currency === destination.currency) {
+      if (charge >= minor) throw Error('The fee must be smaller than the amount sent.');
+      receivedNet = minor - charge; // the fee reduced what arrived
+    } else {
+      if (!received.value.trim()) throw Error(`Enter what ${destination.name} received in ${destination.currency} (an estimate is fine).`);
+      receivedNet = parseAmount(received.value, destination.currency);
+    }
+
+    const transfer = {
+      tags: '', trip: '',
+      ...(editing || {}),
+      id: editing?.id || uid(),
+      kind: 'transfer',
+      ledger: 'active',
+      status: dateInput.value > today ? 'planned' : editing?.status || 'posted',
+      date: dateInput.value,
+      minor,
+      currency: source.currency,
+      precision: source.precision,
+      account: source.id,
+      toAccount: destination.id,
+      category: '',
+      pot: '',
+      note: note.value.trim()
+    };
+    return { transfer, receivedNet, fee: charge, feeCategory: charge ? feeCategory.value : '' };
+  }
+
+  let saving = false;
+  async function submit(event) {
+    event.preventDefault();
+    if (saving || !enough) return;
+    try {
+      const input = readForm();
+      const next = saveTransfer(ledger.state, input);
+      saving = true;
+      saveButton.disabled = true;
+      lastUsed.from = input.transfer.account;
+      lastUsed.to = input.transfer.toAccount;
+      if (input.fee) rememberFeeCategory(input.feeCategory);
+      await saveLedger(next);
+      onSaved(input.transfer);
+      showToast(input.transfer.status === 'planned'
+        ? `Saved as planned for ${formatDay(input.transfer.date)}.`
+        : 'Saved on this device.');
+    } catch (error) {
+      // Keep everything the user typed.
+      saving = false;
+      saveButton.disabled = false;
+      errorBox.textContent = errorMessage(error);
+      errorBox.hidden = false;
+    }
+  }
+
+  return el('form', { class: 'entry-form transfer-form', onsubmit: submit, novalidate: true },
+    sectionTitle(editing ? 'Edit transfer' : 'Move money'),
+    !enough && el('p', { class: 'hint', text: 'Add two accounts in Settings to move money between them.' }),
+    from.field,
+    to.field,
+    el('div', { class: 'field' }, sentLabel, el('div', { class: 'amount-row' }, sent)),
+    el('div', { class: 'entry-meta-row' }, dateInput),
+    receivedField,
+    el('div', { class: 'field' }, feeLabel, fee, el('p', { class: 'hint', text: FEE_HINT })),
+    feeCategoryField,
+    el('div', { class: 'field' }, el('label', { for: 'transfer-note', text: 'Note (optional)' }), note),
+    errorBox,
+    el('div', { class: 'form-actions' },
+      saveButton,
+      editing && el('button', { type: 'button', class: 'btn-secondary', text: 'Cancel', onclick: () => onCancel() })));
+}
+
 // ---- ui/today.js ----
-// Today: quick add for an expense or an income, and the recent entries with net amounts.
+// Today: quick add for an expense, an income or a transfer, and the recent entries with net amounts.
+
+
+
 
 
 
@@ -7371,7 +8229,7 @@ const MORE_CURRENCIES = '__more';
 
 // Remembered while the page is open, so adding several entries is quick.
 // `kept` holds a half-filled form across the redraw that follows adding a currency.
-// `kind` is what the add form records: 'expense' or 'income'.
+// `kind` is what the add form records: 'expense', 'income' or 'transfer'.
 const todayDraft = { currency: '', account: null, editingId: '', kept: null, kind: 'expense' };
 
 function renderToday(root) {
@@ -7382,13 +8240,51 @@ function renderToday(root) {
 
   root.append(slip({ label: 'Today', kind: formatDay(today), wide: true },
     el('div', { class: 'today-layout' },
-      buildEntryForm(state, today, editing),
+      editing?.kind === 'transfer' || (!editing && todayDraft.kind === 'transfer')
+        ? buildTransferPanel(state, today, editing)
+        : buildEntryForm(state, today, editing),
       buildRecentList(state, today))));
 }
 
 // ---------------------------------------------------------------------------
 // Quick add
 // ---------------------------------------------------------------------------
+
+const KINDS = [['expense', 'Expense'], ['income', 'Income'], ['transfer', 'Transfer']];
+
+/** Expense | Income | Transfer. Switching redraws the form for the other kind. */
+function buildKindSwitch(kind, beforeSwitch = () => {}) {
+  return el('div', { class: 'segmented entry-kind', role: 'group', 'aria-label': 'Kind of entry' },
+    KINDS.map(([value, label]) => el('button', {
+      type: 'button', id: `entry-kind-${value}`,
+      class: value === kind ? 'is-selected' : '',
+      'aria-pressed': String(value === kind),
+      text: label,
+      onclick: () => {
+        if (value === kind) return;
+        beforeSwitch(value);
+        todayDraft.kind = value;
+        closePopover({ restoreFocus: false });
+        rerenderToday();
+        document.getElementById(`entry-kind-${value}`)?.focus();
+      }
+    })));
+}
+
+/** The transfer form, with the kind switch above it for a new transfer. */
+function buildTransferPanel(state, today, editing) {
+  const form = buildTransferForm(state, today, editing, {
+    onSaved: () => {
+      todayDraft.editingId = '';
+      todayDraft.kind = 'expense'; // the form goes back to the common case
+      todayDraft.kept = null;
+      rerenderToday();
+    },
+    onCancel: () => { todayDraft.editingId = ''; rerenderToday(); }
+  });
+  if (!editing) form.prepend(buildKindSwitch('transfer'));
+  return form;
+}
 
 function buildEntryForm(state, today, editing) {
   const currencies = [...new Set([...state.settings.activeCurrencies, editing?.currency].filter(Boolean))];
@@ -7397,8 +8293,8 @@ function buildEntryForm(state, today, editing) {
   const kept = todayDraft.kept;
   todayDraft.kept = null;
 
-  // Only plain expenses are edited here, so the switch is for new entries.
-  const kind = editing ? 'expense' : todayDraft.kind;
+  // Plain expenses and incomes are edited here; the switch is for new entries.
+  const kind = (editing ? editing.kind : todayDraft.kind) === 'income' ? 'income' : 'expense';
   const isIncome = kind === 'income';
   const paidLabel = isIncome ? 'Paid into' : 'Paid from';
 
@@ -7623,7 +8519,7 @@ function buildEntryForm(state, today, editing) {
   const picker = createCategoryPicker({
     getState: () => ledger.state,
     kind,
-    value: kept?.category || (isIncome ? '' : editing?.category || state.settings.defaultCategory || '')
+    value: kept?.category || editing?.category || (isIncome ? '' : state.settings.defaultCategory || '')
   });
 
   /** What is typed so far, to carry across a redraw of the form. */
@@ -7635,23 +8531,11 @@ function buildEntryForm(state, today, editing) {
     };
   }
 
-  // --- Expense | Income. Switching redraws the form with the other kind's categories.
-  const kindSwitch = !editing && el('div', { class: 'segmented entry-kind', role: 'group', 'aria-label': 'Kind of entry' },
-    [['expense', 'Expense'], ['income', 'Income']].map(([value, label]) => el('button', {
-      type: 'button', id: `entry-kind-${value}`,
-      class: value === kind ? 'is-selected' : '',
-      'aria-pressed': String(value === kind),
-      text: label,
-      onclick: () => {
-        if (value === kind) return;
-        todayDraft.kept = { ...keepForm(), category: '' }; // a category belongs to one kind
-        todayDraft.currency = currentCurrency;
-        todayDraft.kind = value;
-        closePopover({ restoreFocus: false });
-        rerenderToday();
-        document.getElementById(`entry-kind-${value}`)?.focus();
-      }
-    })));
+  // --- Expense | Income | Transfer. What is typed is carried across the redraw.
+  const kindSwitch = !editing && buildKindSwitch(kind, () => {
+    todayDraft.kept = { ...keepForm(), category: '' }; // a category belongs to one kind
+    todayDraft.currency = currentCurrency;
+  });
 
   const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
   const saveButton = el('button', { type: 'submit', class: 'btn-primary', text: editing ? 'Save changes' : isIncome ? 'Save income' : 'Save expense' });
@@ -7758,7 +8642,7 @@ function buildEntryForm(state, today, editing) {
 
   return el('form', { class: 'entry-form', onsubmit: submit, novalidate: true },
     kindSwitch,
-    sectionTitle(editing ? 'Edit expense' : isIncome ? 'Add income' : 'Add an expense'),
+    sectionTitle(editing ? (isIncome ? 'Edit income' : 'Edit expense') : isIncome ? 'Add income' : 'Add an expense'),
     el('div', { class: 'field' },
       el('label', { for: 'entry-amount', text: 'Amount' }),
       el('div', { class: 'amount-row' }, amount)),
@@ -7816,7 +8700,7 @@ function buildRecentList(state, today) {
   const rows = state.entries
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => entry.ledger === 'active' && entry.status !== 'cancelled'
-      && entry.kind !== 'refund' && entry.date <= today)
+      && entry.kind !== 'refund' && !entry.feeOnReceived && entry.date <= today)
     .sort((a, b) => b.entry.date.localeCompare(a.entry.date) || b.index - a.index)
     .slice(0, RECENT_LIMIT)
     .map(row => row.entry);
@@ -7831,7 +8715,9 @@ function buildRecentList(state, today) {
 
     // Net spending per currency for the day. Currencies are never added together.
     const totals = new Map();
-    for (const entry of dayRows.filter(e => e.kind === 'expense')) {
+    // A fee taken from a transfer is spending too, though it is listed inside its transfer.
+    const spending = dayRows.flatMap(e => e.kind === 'transfer' ? [transferParts(state, e).fee].filter(Boolean) : [e]);
+    for (const entry of spending.filter(e => e.kind === 'expense')) {
       const key = `${entry.currency}:${entry.precision}`;
       totals.set(key, (totals.get(key) || 0n) + netAmount(state, entry));
     }
@@ -7862,9 +8748,11 @@ function entryRow(state, entry) {
   const title = entry.kind === 'transfer'
     ? `${nameOf('accounts', entry.account)} → ${nameOf('accounts', entry.toAccount)}`
     : category?.name || entry.kind;
+  const receivedFee = entry.kind === 'transfer' ? transferParts(state, entry).fee : null;
   const meta = [
     parent?.name,
     entry.kind === 'transfer' ? 'Transfer' : nameOf('accounts', entry.account),
+    receivedFee && `fee ${formatMoney(receivedFee.minor, receivedFee.currency, receivedFee.precision)}`,
     entry.status === 'planned' && 'Planned',
     entry.note
   ].filter(Boolean).join(' · ');
@@ -7878,7 +8766,7 @@ function entryRow(state, entry) {
       el('span', { class: 'entry-text' },
         el('span', { class: 'entry-title', text: title }),
         meta && el('span', { class: 'entry-meta', text: meta })),
-      el('span', { class: amountClass, text: formatMoney(shown, entry.currency, entry.precision, { signed: true }) })),
+      el('span', { class: amountClass, text: formatMoney(shown, entry.currency, entry.precision, { signed: entry.kind !== 'transfer' }) })),
     entryDetail(state, entry, net));
 }
 
@@ -7896,13 +8784,35 @@ function entryDetail(state, entry, net) {
       const friend = state.friends.find(f => f.id === entry.friend)?.name || 'Friend';
       lines.push(line(`Your share (${friend} covers the rest)`, money(-personalAmount(entry))));
     }
+    const refundable = canRefundHere(state, entry);
     for (const refund of refunds) {
-      lines.push(line(`${formatDay(refund.date)} · Refund`, money(BigInt(refund.personalMinor ?? refund.minor))));
+      const label = `${formatDay(refund.date)} · Refund`;
+      const value = money(BigInt(refund.personalMinor ?? refund.minor));
+      // Refunds recorded here can be changed here: the label carries an Edit button.
+      lines.push(refundable
+        ? el('div', { class: 'detail-line' },
+            el('span', {}, label + ' ', el('button', {
+              type: 'button', class: 'btn-text', text: 'Edit', 'aria-label': `Edit refund of ${value}`,
+              onclick: event => openRefundSheet(event.currentTarget, entry, refund)
+            })),
+            el('span', { class: 'detail-value', text: value }))
+        : line(label, value));
     }
     if (refunds.length || entry.friend) lines.push(line('Net', money(net)));
     if (entry.splits) lines.push(line('Split', `${entry.splits.length} parts`));
+  } else if (entry.kind === 'transfer') {
+    // Sent in the from-account's currency; received, fee and arrived in the to-account's.
+    const destination = state.accounts.find(a => a.id === entry.toAccount);
+    const arrived = minor => formatMoney(minor, destination?.currency || entry.currency, destination?.precision ?? entry.precision);
+    const { fee, receivedNet } = transferParts(state, entry);
+    lines.push(line(`${formatDay(entry.date)} · Sent`, money(BigInt(entry.minor), false)));
+    lines.push(line('Received', arrived(BigInt(entry.receivedMinor))));
+    if (fee) {
+      lines.push(line('Fee', arrived(BigInt(fee.minor))));
+      lines.push(line('Arrived', arrived(receivedNet)));
+    }
   } else {
-    lines.push(line(formatDay(entry.date), money(entry.kind === 'transfer' ? BigInt(entry.minor) : net, entry.kind !== 'transfer')));
+    lines.push(line(formatDay(entry.date), money(net)));
   }
 
   if (entry.settledMinor != null && entry.settledCurrency !== entry.currency) {
@@ -7911,18 +8821,125 @@ function entryDetail(state, entry, net) {
   const pot = state.pots.find(p => p.id === entry.pot);
   if (pot) lines.push(line('Pot', pot.name));
 
-  // Plain expenses can be edited here. Other kinds keep their own forms in the previous version.
-  const simple = entry.kind === 'expense' && !entry.splits && !entry.friend;
+  // Plain expenses, incomes not yet shared out between pots, and transfers can be edited here.
+  // Other kinds keep their own forms in the previous version.
+  const simple = (entry.kind === 'expense' && !entry.splits && !entry.friend)
+    || (entry.kind === 'income' && !entry.friend && !state.allocations.some(a => a.salary === entry.id))
+    || (entry.kind === 'transfer' && !hasSourceFee(state, entry));
+  const firstField = entry.kind === 'transfer' ? 'transfer-amount' : 'entry-amount';
   const actions = el('div', { class: 'entry-actions' },
     simple
       ? el('button', {
           type: 'button', class: 'btn-text', text: 'Edit',
-          onclick: () => { todayDraft.editingId = entry.id; rerenderToday(); document.getElementById('entry-amount')?.focus(); }
+          onclick: () => { todayDraft.editingId = entry.id; rerenderToday(); document.getElementById(firstField)?.focus(); }
         })
       : el('a', { class: 'btn-text', href: LEGACY_URL, text: 'Edit in previous version' }),
+    entry.kind === 'expense' && canRefundHere(state, entry) && refundedSoFar(state, entry) < BigInt(entry.minor)
+      && el('button', { type: 'button', class: 'btn-text', text: 'Add refund', onclick: event => openRefundSheet(event.currentTarget, entry) }),
     deleteButton(entry));
 
   return el('div', { class: 'entry-detail' }, lines, actions);
+}
+
+/**
+ * The refund sheet for a purchase: a new refund, or `refund` to change or delete.
+ * The rules (how much is left, which dates are allowed) live in refund-logic.js.
+ */
+function openRefundSheet(anchor, purchase, refund = null) {
+  const state = ledger.state;
+  const today = todayIso();
+  const left = BigInt(purchase.minor) - refundedSoFar(state, purchase, refund?.id || '');
+  const account = state.accounts.find(a => a.id === purchase.account);
+  const foreign = purchase.settledMinor != null && Boolean(purchase.settledCurrency);
+  const field = (id, label, control, hint) => el('div', { class: 'field' },
+    el('label', { for: id, text: label }), control, hint && el('p', { class: 'hint', text: hint }));
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const showError = error => {
+    errorBox.textContent = errorMessage(error);
+    errorBox.hidden = false;
+    if (!form.isConnected) showToast(errorMessage(error));
+  };
+
+  const amount = el('input', {
+    id: 'refund-amount', type: 'text', inputMode: 'decimal', autocomplete: 'off',
+    placeholder: `Up to ${formatMoney(left, purchase.currency, purchase.precision)}`,
+    value: refund ? plainAmount(refund.minor, purchase.precision) : ''
+  });
+  const date = el('input', {
+    id: 'refund-date', type: 'date', min: purchase.date, max: today, value: refund ? refund.date : today
+  });
+  const note = el('input', { id: 'refund-note', type: 'text', maxLength: 500, autocomplete: 'off', value: refund?.note || '' });
+
+  // Paid in another currency: what the account got back. It follows the refund amount
+  // as an estimate until the user types their own figure.
+  let creditIsEstimate = !refund || refund.settledEstimate === true;
+  const credited = foreign && el('input', {
+    id: 'refund-credited', type: 'text', inputMode: 'decimal', autocomplete: 'off',
+    value: refund?.settledMinor != null ? plainAmount(refund.settledMinor, purchase.settledPrecision) : '',
+    oninput: () => { creditIsEstimate = false; }
+  });
+  const readAmount = () => parseAmount(amount.value, purchase.currency);
+  if (foreign) {
+    amount.addEventListener('input', () => {
+      if (!creditIsEstimate) return;
+      let suggestion = null;
+      try { suggestion = suggestedSettled(purchase, readAmount()); } catch { /* amount not complete yet */ }
+      credited.value = suggestion == null ? '' : plainAmount(suggestion, purchase.settledPrecision);
+    });
+  }
+
+  let armed = false;
+  const remove = refund && el('button', { type: 'button', class: 'btn-text', text: 'Delete refund' });
+  if (remove) {
+    remove.addEventListener('blur', () => { armed = false; remove.textContent = 'Delete refund'; remove.classList.remove('is-armed'); });
+    remove.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true;
+        remove.textContent = 'Press again to delete';
+        remove.classList.add('is-armed');
+        return;
+      }
+      try {
+        const next = deleteRefund(ledger.state, refund.id);
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast('Refund deleted.');
+      } catch (error) {
+        showError(error);
+      }
+    });
+  }
+
+  const form = el('form', {
+    class: 'pot-sheet', novalidate: true,
+    onsubmit: async event => {
+      event.preventDefault();
+      try {
+        if (!amount.value.trim()) throw Error('Enter the refund amount.');
+        const fields = { purchaseId: purchase.id, id: refund?.id || '', minor: readAmount(), date: date.value, note: note.value, today };
+        if (foreign && credited.value.trim()) {
+          fields.settledMinor = parseAmount(credited.value, purchase.settledCurrency);
+          fields.settledEstimate = creditIsEstimate;
+        }
+        const next = saveRefund(ledger.state, fields);
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast('Refund saved.');
+      } catch (error) {
+        showError(error);
+      }
+    }
+  },
+    field('refund-amount', `Amount (${purchase.currency})`, amount),
+    field('refund-date', 'Date', date),
+    foreign && field('refund-credited', `Credited to ${account?.name || 'account'} (${purchase.settledCurrency})`, credited, 'Estimate from the original charge'),
+    field('refund-note', 'Note (optional)', note),
+    errorBox,
+    el('div', { class: 'entry-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: 'Save refund' }),
+      remove));
+
+  openPopover({ anchor, label: refund ? 'Edit refund' : 'Refund', role: 'dialog', content: form });
 }
 
 /** Two presses: the first asks, the second deletes. Deleted records can be restored. */
@@ -9275,7 +10292,7 @@ const SECTIONS = [
   { id: 'sync', label: 'Sync', title: 'Google Sheets sync', build: rerender => [buildSync(rerender)] },
   {
     id: 'data', label: 'Data', title: 'Previous version', build: () => [
-      el('p', { class: 'note', text: 'Recurring payments, transfers, refunds and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
+      el('p', { class: 'note', text: 'Recurring payments, transfers and backups still live in the previous version while this one is rebuilt. Both use the same records.' }),
       el('a', { class: 'btn-secondary', href: LEGACY_URL, text: 'Open previous version' }),
       el('p', { class: 'note data-note', text: 'Your records stay in this browser on this device. They are sent only to your own Google Sheet, and only after you connect one under Sync.' })
     ]
@@ -10535,8 +11552,12 @@ function buildHideToggles({ groups, rerender }) {
           reportsUi.drill = '';
           saveReportChoice();
           rerender();
-        }
-      }, el('span', { class: 'rp-toggle-box', 'aria-hidden': 'true' }), el('span', { text: group.label }));
+        },
+        'aria-label': group.label
+      }, el('span', { class: 'rp-toggle-box', 'aria-hidden': 'true' }),
+        // On a phone only "Hide <pot>" shows, so both chips fit on one row.
+        el('span', { text: `Hide ${group.title}` }),
+        el('span', { class: 'rp-toggle-names', text: group.label.slice(`Hide ${group.title}`.length) }));
     }));
 }
 
@@ -11152,7 +12173,9 @@ function startShell() {
 
 
 
+
 initThemeToggle(document.getElementById('theme-toggle'));
+enhanceSelects();
 
 try {
   await openLedger();

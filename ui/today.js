@@ -1,4 +1,4 @@
-// Today: quick add for an expense or an income, and the recent entries with net amounts.
+// Today: quick add for an expense, an income or a transfer, and the recent entries with net amounts.
 
 import { digits, parseAmount, currencyName } from '../domain.js';
 import { commit, commitBatch, uid } from '../model.js';
@@ -13,13 +13,16 @@ import { negativePotCheck } from '../pots-logic.js';
 import { opensPaydayFlow } from '../payday-flow.js';
 import { askNegativePot, openPaydayPreview } from './pots.js';
 import { accountIconNode } from './pixel-icons.js';
+import { buildTransferForm } from './transfer.js';
+import { transferParts, hasSourceFee } from '../transfer-logic.js';
+import { saveRefund, deleteRefund, refundedSoFar, canRefundHere, suggestedSettled } from '../refund-logic.js';
 
 const RECENT_LIMIT = 40;
 const MORE_CURRENCIES = '__more';
 
 // Remembered while the page is open, so adding several entries is quick.
 // `kept` holds a half-filled form across the redraw that follows adding a currency.
-// `kind` is what the add form records: 'expense' or 'income'.
+// `kind` is what the add form records: 'expense', 'income' or 'transfer'.
 const todayDraft = { currency: '', account: null, editingId: '', kept: null, kind: 'expense' };
 
 export function renderToday(root) {
@@ -30,13 +33,51 @@ export function renderToday(root) {
 
   root.append(slip({ label: 'Today', kind: formatDay(today), wide: true },
     el('div', { class: 'today-layout' },
-      buildEntryForm(state, today, editing),
+      editing?.kind === 'transfer' || (!editing && todayDraft.kind === 'transfer')
+        ? buildTransferPanel(state, today, editing)
+        : buildEntryForm(state, today, editing),
       buildRecentList(state, today))));
 }
 
 // ---------------------------------------------------------------------------
 // Quick add
 // ---------------------------------------------------------------------------
+
+const KINDS = [['expense', 'Expense'], ['income', 'Income'], ['transfer', 'Transfer']];
+
+/** Expense | Income | Transfer. Switching redraws the form for the other kind. */
+function buildKindSwitch(kind, beforeSwitch = () => {}) {
+  return el('div', { class: 'segmented entry-kind', role: 'group', 'aria-label': 'Kind of entry' },
+    KINDS.map(([value, label]) => el('button', {
+      type: 'button', id: `entry-kind-${value}`,
+      class: value === kind ? 'is-selected' : '',
+      'aria-pressed': String(value === kind),
+      text: label,
+      onclick: () => {
+        if (value === kind) return;
+        beforeSwitch(value);
+        todayDraft.kind = value;
+        closePopover({ restoreFocus: false });
+        rerenderToday();
+        document.getElementById(`entry-kind-${value}`)?.focus();
+      }
+    })));
+}
+
+/** The transfer form, with the kind switch above it for a new transfer. */
+function buildTransferPanel(state, today, editing) {
+  const form = buildTransferForm(state, today, editing, {
+    onSaved: () => {
+      todayDraft.editingId = '';
+      todayDraft.kind = 'expense'; // the form goes back to the common case
+      todayDraft.kept = null;
+      rerenderToday();
+    },
+    onCancel: () => { todayDraft.editingId = ''; rerenderToday(); }
+  });
+  if (!editing) form.prepend(buildKindSwitch('transfer'));
+  return form;
+}
 
 function buildEntryForm(state, today, editing) {
   const currencies = [...new Set([...state.settings.activeCurrencies, editing?.currency].filter(Boolean))];
@@ -45,8 +86,8 @@ function buildEntryForm(state, today, editing) {
   const kept = todayDraft.kept;
   todayDraft.kept = null;
 
-  // Only plain expenses are edited here, so the switch is for new entries.
-  const kind = editing ? 'expense' : todayDraft.kind;
+  // Plain expenses and incomes are edited here; the switch is for new entries.
+  const kind = (editing ? editing.kind : todayDraft.kind) === 'income' ? 'income' : 'expense';
   const isIncome = kind === 'income';
   const paidLabel = isIncome ? 'Paid into' : 'Paid from';
 
@@ -271,7 +312,7 @@ function buildEntryForm(state, today, editing) {
   const picker = createCategoryPicker({
     getState: () => ledger.state,
     kind,
-    value: kept?.category || (isIncome ? '' : editing?.category || state.settings.defaultCategory || '')
+    value: kept?.category || editing?.category || (isIncome ? '' : state.settings.defaultCategory || '')
   });
 
   /** What is typed so far, to carry across a redraw of the form. */
@@ -283,23 +324,11 @@ function buildEntryForm(state, today, editing) {
     };
   }
 
-  // --- Expense | Income. Switching redraws the form with the other kind's categories.
-  const kindSwitch = !editing && el('div', { class: 'segmented entry-kind', role: 'group', 'aria-label': 'Kind of entry' },
-    [['expense', 'Expense'], ['income', 'Income']].map(([value, label]) => el('button', {
-      type: 'button', id: `entry-kind-${value}`,
-      class: value === kind ? 'is-selected' : '',
-      'aria-pressed': String(value === kind),
-      text: label,
-      onclick: () => {
-        if (value === kind) return;
-        todayDraft.kept = { ...keepForm(), category: '' }; // a category belongs to one kind
-        todayDraft.currency = currentCurrency;
-        todayDraft.kind = value;
-        closePopover({ restoreFocus: false });
-        rerenderToday();
-        document.getElementById(`entry-kind-${value}`)?.focus();
-      }
-    })));
+  // --- Expense | Income | Transfer. What is typed is carried across the redraw.
+  const kindSwitch = !editing && buildKindSwitch(kind, () => {
+    todayDraft.kept = { ...keepForm(), category: '' }; // a category belongs to one kind
+    todayDraft.currency = currentCurrency;
+  });
 
   const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
   const saveButton = el('button', { type: 'submit', class: 'btn-primary', text: editing ? 'Save changes' : isIncome ? 'Save income' : 'Save expense' });
@@ -406,7 +435,7 @@ function buildEntryForm(state, today, editing) {
 
   return el('form', { class: 'entry-form', onsubmit: submit, novalidate: true },
     kindSwitch,
-    sectionTitle(editing ? 'Edit expense' : isIncome ? 'Add income' : 'Add an expense'),
+    sectionTitle(editing ? (isIncome ? 'Edit income' : 'Edit expense') : isIncome ? 'Add income' : 'Add an expense'),
     el('div', { class: 'field' },
       el('label', { for: 'entry-amount', text: 'Amount' }),
       el('div', { class: 'amount-row' }, amount)),
@@ -464,7 +493,7 @@ function buildRecentList(state, today) {
   const rows = state.entries
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => entry.ledger === 'active' && entry.status !== 'cancelled'
-      && entry.kind !== 'refund' && entry.date <= today)
+      && entry.kind !== 'refund' && !entry.feeOnReceived && entry.date <= today)
     .sort((a, b) => b.entry.date.localeCompare(a.entry.date) || b.index - a.index)
     .slice(0, RECENT_LIMIT)
     .map(row => row.entry);
@@ -479,7 +508,9 @@ function buildRecentList(state, today) {
 
     // Net spending per currency for the day. Currencies are never added together.
     const totals = new Map();
-    for (const entry of dayRows.filter(e => e.kind === 'expense')) {
+    // A fee taken from a transfer is spending too, though it is listed inside its transfer.
+    const spending = dayRows.flatMap(e => e.kind === 'transfer' ? [transferParts(state, e).fee].filter(Boolean) : [e]);
+    for (const entry of spending.filter(e => e.kind === 'expense')) {
       const key = `${entry.currency}:${entry.precision}`;
       totals.set(key, (totals.get(key) || 0n) + netAmount(state, entry));
     }
@@ -510,9 +541,11 @@ function entryRow(state, entry) {
   const title = entry.kind === 'transfer'
     ? `${nameOf('accounts', entry.account)} → ${nameOf('accounts', entry.toAccount)}`
     : category?.name || entry.kind;
+  const receivedFee = entry.kind === 'transfer' ? transferParts(state, entry).fee : null;
   const meta = [
     parent?.name,
     entry.kind === 'transfer' ? 'Transfer' : nameOf('accounts', entry.account),
+    receivedFee && `fee ${formatMoney(receivedFee.minor, receivedFee.currency, receivedFee.precision)}`,
     entry.status === 'planned' && 'Planned',
     entry.note
   ].filter(Boolean).join(' · ');
@@ -526,7 +559,7 @@ function entryRow(state, entry) {
       el('span', { class: 'entry-text' },
         el('span', { class: 'entry-title', text: title }),
         meta && el('span', { class: 'entry-meta', text: meta })),
-      el('span', { class: amountClass, text: formatMoney(shown, entry.currency, entry.precision, { signed: true }) })),
+      el('span', { class: amountClass, text: formatMoney(shown, entry.currency, entry.precision, { signed: entry.kind !== 'transfer' }) })),
     entryDetail(state, entry, net));
 }
 
@@ -544,13 +577,35 @@ function entryDetail(state, entry, net) {
       const friend = state.friends.find(f => f.id === entry.friend)?.name || 'Friend';
       lines.push(line(`Your share (${friend} covers the rest)`, money(-personalAmount(entry))));
     }
+    const refundable = canRefundHere(state, entry);
     for (const refund of refunds) {
-      lines.push(line(`${formatDay(refund.date)} · Refund`, money(BigInt(refund.personalMinor ?? refund.minor))));
+      const label = `${formatDay(refund.date)} · Refund`;
+      const value = money(BigInt(refund.personalMinor ?? refund.minor));
+      // Refunds recorded here can be changed here: the label carries an Edit button.
+      lines.push(refundable
+        ? el('div', { class: 'detail-line' },
+            el('span', {}, label + ' ', el('button', {
+              type: 'button', class: 'btn-text', text: 'Edit', 'aria-label': `Edit refund of ${value}`,
+              onclick: event => openRefundSheet(event.currentTarget, entry, refund)
+            })),
+            el('span', { class: 'detail-value', text: value }))
+        : line(label, value));
     }
     if (refunds.length || entry.friend) lines.push(line('Net', money(net)));
     if (entry.splits) lines.push(line('Split', `${entry.splits.length} parts`));
+  } else if (entry.kind === 'transfer') {
+    // Sent in the from-account's currency; received, fee and arrived in the to-account's.
+    const destination = state.accounts.find(a => a.id === entry.toAccount);
+    const arrived = minor => formatMoney(minor, destination?.currency || entry.currency, destination?.precision ?? entry.precision);
+    const { fee, receivedNet } = transferParts(state, entry);
+    lines.push(line(`${formatDay(entry.date)} · Sent`, money(BigInt(entry.minor), false)));
+    lines.push(line('Received', arrived(BigInt(entry.receivedMinor))));
+    if (fee) {
+      lines.push(line('Fee', arrived(BigInt(fee.minor))));
+      lines.push(line('Arrived', arrived(receivedNet)));
+    }
   } else {
-    lines.push(line(formatDay(entry.date), money(entry.kind === 'transfer' ? BigInt(entry.minor) : net, entry.kind !== 'transfer')));
+    lines.push(line(formatDay(entry.date), money(net)));
   }
 
   if (entry.settledMinor != null && entry.settledCurrency !== entry.currency) {
@@ -559,18 +614,125 @@ function entryDetail(state, entry, net) {
   const pot = state.pots.find(p => p.id === entry.pot);
   if (pot) lines.push(line('Pot', pot.name));
 
-  // Plain expenses can be edited here. Other kinds keep their own forms in the previous version.
-  const simple = entry.kind === 'expense' && !entry.splits && !entry.friend;
+  // Plain expenses, incomes not yet shared out between pots, and transfers can be edited here.
+  // Other kinds keep their own forms in the previous version.
+  const simple = (entry.kind === 'expense' && !entry.splits && !entry.friend)
+    || (entry.kind === 'income' && !entry.friend && !state.allocations.some(a => a.salary === entry.id))
+    || (entry.kind === 'transfer' && !hasSourceFee(state, entry));
+  const firstField = entry.kind === 'transfer' ? 'transfer-amount' : 'entry-amount';
   const actions = el('div', { class: 'entry-actions' },
     simple
       ? el('button', {
           type: 'button', class: 'btn-text', text: 'Edit',
-          onclick: () => { todayDraft.editingId = entry.id; rerenderToday(); document.getElementById('entry-amount')?.focus(); }
+          onclick: () => { todayDraft.editingId = entry.id; rerenderToday(); document.getElementById(firstField)?.focus(); }
         })
       : el('a', { class: 'btn-text', href: LEGACY_URL, text: 'Edit in previous version' }),
+    entry.kind === 'expense' && canRefundHere(state, entry) && refundedSoFar(state, entry) < BigInt(entry.minor)
+      && el('button', { type: 'button', class: 'btn-text', text: 'Add refund', onclick: event => openRefundSheet(event.currentTarget, entry) }),
     deleteButton(entry));
 
   return el('div', { class: 'entry-detail' }, lines, actions);
+}
+
+/**
+ * The refund sheet for a purchase: a new refund, or `refund` to change or delete.
+ * The rules (how much is left, which dates are allowed) live in refund-logic.js.
+ */
+function openRefundSheet(anchor, purchase, refund = null) {
+  const state = ledger.state;
+  const today = todayIso();
+  const left = BigInt(purchase.minor) - refundedSoFar(state, purchase, refund?.id || '');
+  const account = state.accounts.find(a => a.id === purchase.account);
+  const foreign = purchase.settledMinor != null && Boolean(purchase.settledCurrency);
+  const field = (id, label, control, hint) => el('div', { class: 'field' },
+    el('label', { for: id, text: label }), control, hint && el('p', { class: 'hint', text: hint }));
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const showError = error => {
+    errorBox.textContent = errorMessage(error);
+    errorBox.hidden = false;
+    if (!form.isConnected) showToast(errorMessage(error));
+  };
+
+  const amount = el('input', {
+    id: 'refund-amount', type: 'text', inputMode: 'decimal', autocomplete: 'off',
+    placeholder: `Up to ${formatMoney(left, purchase.currency, purchase.precision)}`,
+    value: refund ? plainAmount(refund.minor, purchase.precision) : ''
+  });
+  const date = el('input', {
+    id: 'refund-date', type: 'date', min: purchase.date, max: today, value: refund ? refund.date : today
+  });
+  const note = el('input', { id: 'refund-note', type: 'text', maxLength: 500, autocomplete: 'off', value: refund?.note || '' });
+
+  // Paid in another currency: what the account got back. It follows the refund amount
+  // as an estimate until the user types their own figure.
+  let creditIsEstimate = !refund || refund.settledEstimate === true;
+  const credited = foreign && el('input', {
+    id: 'refund-credited', type: 'text', inputMode: 'decimal', autocomplete: 'off',
+    value: refund?.settledMinor != null ? plainAmount(refund.settledMinor, purchase.settledPrecision) : '',
+    oninput: () => { creditIsEstimate = false; }
+  });
+  const readAmount = () => parseAmount(amount.value, purchase.currency);
+  if (foreign) {
+    amount.addEventListener('input', () => {
+      if (!creditIsEstimate) return;
+      let suggestion = null;
+      try { suggestion = suggestedSettled(purchase, readAmount()); } catch { /* amount not complete yet */ }
+      credited.value = suggestion == null ? '' : plainAmount(suggestion, purchase.settledPrecision);
+    });
+  }
+
+  let armed = false;
+  const remove = refund && el('button', { type: 'button', class: 'btn-text', text: 'Delete refund' });
+  if (remove) {
+    remove.addEventListener('blur', () => { armed = false; remove.textContent = 'Delete refund'; remove.classList.remove('is-armed'); });
+    remove.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true;
+        remove.textContent = 'Press again to delete';
+        remove.classList.add('is-armed');
+        return;
+      }
+      try {
+        const next = deleteRefund(ledger.state, refund.id);
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast('Refund deleted.');
+      } catch (error) {
+        showError(error);
+      }
+    });
+  }
+
+  const form = el('form', {
+    class: 'pot-sheet', novalidate: true,
+    onsubmit: async event => {
+      event.preventDefault();
+      try {
+        if (!amount.value.trim()) throw Error('Enter the refund amount.');
+        const fields = { purchaseId: purchase.id, id: refund?.id || '', minor: readAmount(), date: date.value, note: note.value, today };
+        if (foreign && credited.value.trim()) {
+          fields.settledMinor = parseAmount(credited.value, purchase.settledCurrency);
+          fields.settledEstimate = creditIsEstimate;
+        }
+        const next = saveRefund(ledger.state, fields);
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast('Refund saved.');
+      } catch (error) {
+        showError(error);
+      }
+    }
+  },
+    field('refund-amount', `Amount (${purchase.currency})`, amount),
+    field('refund-date', 'Date', date),
+    foreign && field('refund-credited', `Credited to ${account?.name || 'account'} (${purchase.settledCurrency})`, credited, 'Estimate from the original charge'),
+    field('refund-note', 'Note (optional)', note),
+    errorBox,
+    el('div', { class: 'entry-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: 'Save refund' }),
+      remove));
+
+  openPopover({ anchor, label: refund ? 'Edit refund' : 'Refund', role: 'dialog', content: form });
 }
 
 /** Two presses: the first asks, the second deletes. Deleted records can be restored. */

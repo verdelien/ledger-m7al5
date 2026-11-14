@@ -2,12 +2,14 @@
 
 import { el, errorMessage, LEGACY_URL } from './dom.js';
 import { initThemeToggle } from './theme.js';
+import { enhanceSelects } from './select.js';
 import { openLedger } from './ledger.js';
 import { startShell } from './shell.js';
 import { runRolloverOnOpen } from './pots.js';
 import { startSync } from './sync.js';
 
 initThemeToggle(document.getElementById('theme-toggle'));
+enhanceSelects();
 
 try {
   await openLedger();

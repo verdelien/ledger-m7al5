@@ -20,9 +20,10 @@ export function accountCurrencies(state, accounts) {
  *   currency           → the entry currency; its tab is shown first
  *   today              → balances are shown as of this day
  *   onChange(id)
+ *   chosenLabel        → the words before the chosen account's name (default 'Paid from')
  * Returns { element, getValue(), showCurrency(code) }.
  */
-export function createAccountPicker({ getState, getAccounts, value = '', currency = '', today, onChange = () => {} }) {
+export function createAccountPicker({ getState, getAccounts, value = '', currency = '', today, onChange = () => {}, chosenLabel = 'Paid from' }) {
   let selected = value;
   let tab = currency; // '' is the "All" tab
   const element = el('div', { class: 'acct-picker' });
@@ -60,7 +61,7 @@ export function createAccountPicker({ getState, getAccounts, value = '', currenc
 
     const chosen = accounts.find(account => account.id === selected);
     element.replaceChildren(...[tabs, grid, el('p', { class: 'cat-chosen' },
-      chosen ? ['Paid from ', el('strong', { text: `${chosen.name} · ${chosen.currency}` })] : 'No account chosen.')].filter(Boolean));
+      chosen ? [chosenLabel + ' ', el('strong', { text: `${chosen.name} · ${chosen.currency}` })] : 'No account chosen.')].filter(Boolean));
 
     if (focusSelector) element.querySelector(focusSelector)?.focus();
   }

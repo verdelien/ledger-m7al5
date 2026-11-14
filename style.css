@@ -1087,6 +1087,7 @@ input::placeholder {
 .detail-line {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: var(--s3);
   padding: var(--s1) 0;
   font-size: 13.5px;
@@ -1566,6 +1567,77 @@ button.ed-name:hover .ed-name-text {
   content: "✓";
   margin-left: auto;
   color: var(--blue);
+}
+
+/* A select's own list is replaced by a popover list (ui/select.js). The
+   native control stays in the page, hidden; the button stands in for it. */
+.select-native {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-height: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.select-button {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  min-width: 0;
+  height: var(--control);
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1.5px solid var(--line-strong);
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.select-button[hidden] {
+  display: none;
+}
+
+.select-button-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-button .caret {
+  color: var(--muted);
+}
+
+.select-button:focus-visible,
+.select-button[aria-expanded="true"] {
+  border-bottom-color: var(--blue);
+}
+
+.select-button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.pop-group {
+  padding: var(--s2);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.pop-option[aria-disabled="true"] {
+  opacity: .4;
+  cursor: default;
 }
 
 /* --------------------------------------------------------------------------
@@ -2477,7 +2549,7 @@ button.ed-name:hover .ed-name-text {
   }
 }
 
-/* Today: the Expense | Income switch above the add form */
+/* Today: the Expense | Income | Transfer switch above the add form */
 .entry-kind {
   display: flex;
   margin-bottom: var(--s3);
@@ -2677,6 +2749,12 @@ button.ed-name:hover .ed-name-text {
 
 .rp-toggle.is-on .rp-toggle-box {
   background: currentColor;
+}
+
+/* The bracketed category names only from 768px; the button's label keeps them. */
+.rp-toggle-names {
+  display: none;
+  white-space: pre-wrap;
 }
 
 .rp-compare-button {
@@ -3336,6 +3414,10 @@ g.rp-mark:focus-visible > .rp-hit {
 
   .rp-toggle {
     font-size: 13px;
+  }
+
+  .rp-toggle-names {
+    display: inline;
   }
 }
 
