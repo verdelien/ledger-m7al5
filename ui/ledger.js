@@ -3,6 +3,7 @@
 // the model's commit functions, then hand it to saveLedger().
 
 import { ensureDocumentedCategories, validateState } from '../model.js';
+import { ensureDefaultTemplates } from '../templates-logic.js';
 import { LedgerStore } from '../store.js';
 import { todayIso, showToast } from './dom.js';
 
@@ -21,7 +22,8 @@ export async function openLedger() {
   ledger.store = new LedgerStore();
   ledger.state = await ledger.store.open(todayIso());
 
-  const upgraded = ensureDocumentedCategories(ledger.state);
+  // Default categories first: the starting Quick add templates point at them.
+  const upgraded = ensureDefaultTemplates(ensureDocumentedCategories(ledger.state));
   if (upgraded !== ledger.state) {
     await ledger.store.write(upgraded, ledger.state.revision);
     ledger.state = upgraded;

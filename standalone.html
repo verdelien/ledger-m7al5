@@ -3540,6 +3540,69 @@ g.rp-mark:focus-visible > .rp-hit {
   color: var(--blue);
   font-weight: 600;
 }
+
+/* --------------------------------------------------------------------------
+   Today → Quick add: template chips above the amount. One scrolling line on
+   a phone; they wrap from 768px.
+   -------------------------------------------------------------------------- */
+
+.quick-add {
+  margin-bottom: var(--s3);
+}
+
+.quick-add-label {
+  display: block;
+  margin-bottom: var(--s1);
+}
+
+.quick-add-row {
+  display: flex;
+  gap: var(--s2);
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.quick-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 44px;
+  padding: 0 var(--s3);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.quick-chip:hover {
+  border-color: var(--ink);
+}
+
+.quick-chip-amount {
+  color: var(--muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.quick-chip-edit {
+  border-style: dashed;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+@media (min-width: 768px) {
+  .quick-add-row {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
 </style>
 </head>
 <body>
@@ -5253,6 +5316,138 @@ function deleteRefund(state, id) {
   return commitBatch(state, [{ table: 'entries', record, action: 'delete' }]);
 }
 
+// ---- templates-logic.js ----
+// Quick-add templates: saved shortcuts that fill the Today form.
+// Pure functions over the ledger state; nothing here touches the page.
+//
+// A template record (the shape the previous version also reads):
+//   { id, name, amount, currency, category, account, pot, note, order, modes, archived }
+// `amount` is decimal text such as '50.00'. Empty text means "ask each time".
+// `account` is an account ID, or '' for "whatever the form would use".
+// `modes` says the same thing in the older form's words, and is derived on save.
+
+
+
+
+const templateModes = (amount, account) => ({
+  amount: amount ? 'fixed' : 'prompt', currency: 'fixed', category: 'fixed',
+  account: account ? 'fixed' : 'inherit', pot: 'inherit'
+});
+
+// The starting pair. The IDs are fixed so two synced devices do not add them twice.
+const DEFAULT_TEMPLATES = [
+  { id: 'tpl:tfl', name: 'TfL top-up', amount: '50.00', currency: 'GBP', category: 'transport:tfl', account: '', pot: '', note: '', order: 0, modes: templateModes('50.00', ''), archived: false },
+  { id: 'tpl:groceries', name: 'Groceries', amount: '', currency: 'GBP', category: 'Groceries', account: '', pot: '', note: '', order: 1, modes: templateModes('', ''), archived: false }
+];
+
+/**
+ * Add the starting templates once per ledger. A default whose category is
+ * missing is skipped. `settings.templatesSeeded` records that this ran, so a
+ * default the user archived or deleted never comes back.
+ * Returns the same object when there is nothing to do.
+ */
+function ensureDefaultTemplates(s) {
+  if (s.settings.templatesSeeded === true) return s;
+  const operations = DEFAULT_TEMPLATES
+    .filter(t => !s.templates.some(r => r.id === t.id) && s.categories.some(c => c.id === t.category))
+    .map(t => ({ table: 'templates', record: structuredClone(t) }));
+  // commitBatch returns a fresh copy, so the flag can be set on it directly.
+  // A settings change is saved as a new revision (as ui/currencies.js saveSettings does).
+  const next = commitBatch(s, operations);
+  next.settings.templatesSeeded = true;
+  if (!operations.length) next.revision++;
+  return next;
+}
+
+const templateOrder = t => (Number.isInteger(t.order) ? t.order : Number.MAX_SAFE_INTEGER);
+
+/** Templates in use, in the user's order (then by name). */
+function activeTemplates(s) {
+  return s.templates.filter(t => !t.archived)
+    .sort((a, b) => templateOrder(a) - templateOrder(b) || a.name.localeCompare(b.name));
+}
+
+/** Minor units as plain decimal text: 5000 → '50.00'. */
+function templateAmountText(minor, precision) {
+  const text = String(minor).padStart(precision + 1, '0');
+  return precision ? `${text.slice(0, -precision)}.${text.slice(-precision)}` : text;
+}
+
+/**
+ * Add a template, or change one (`fields.id` set). Throws a readable error
+ * when something is missing. Returns the next state.
+ */
+function saveTemplate(s, fields) {
+  const old = fields.id ? s.templates.find(t => t.id === fields.id) : null;
+  if (fields.id && !old) throw Error('That template no longer exists.');
+  const name = String(fields.name ?? '').trim();
+  if (!name) throw Error('Give the template a name.');
+  if (name.length > 150) throw Error('Use a name of at most 150 characters.');
+  const category = s.categories.find(c => c.id === fields.category);
+  if (!category || category.archived || category.kind !== 'expense') throw Error('Choose an expense category.');
+  const currency = String(fields.currency ?? '');
+  if (!s.settings.activeCurrencies.includes(currency)) throw Error('Choose one of your active currencies.');
+  const typed = String(fields.amount ?? '').trim();
+  let amount = '';
+  if (typed) {
+    let minor;
+    try { minor = parseAmount(typed, currency); } catch {
+      const places = digits(currency);
+      throw Error(`Enter an amount above zero with at most ${places} decimal places, or leave it blank to type it each time.`);
+    }
+    amount = templateAmountText(minor, digits(currency));
+  }
+  const account = fields.account || '';
+  if (account && !s.accounts.some(a => a.id === account)) throw Error('Choose an account, or "Use the usual account".');
+  const note = String(fields.note ?? '').trim();
+  if (note.length > 500) throw Error('Use a note of at most 500 characters.');
+  const record = {
+    ...(old || {}),
+    id: old?.id || uid(), name, amount, currency, category: category.id, account, pot: old?.pot || '', note,
+    order: Number.isInteger(old?.order) ? old.order : s.templates.reduce((max, t) => Math.max(max, Number.isInteger(t.order) ? t.order : -1), -1) + 1,
+    modes: { ...templateModes(amount, account), pot: old?.modes?.pot || 'inherit' },
+    archived: old?.archived || false
+  };
+  return commit(s, 'templates', record);
+}
+
+/** Hide a template from Quick add. The record is kept. */
+function archiveTemplate(s, id) {
+  const template = s.templates.find(t => t.id === id);
+  if (!template) throw Error('That template no longer exists.');
+  return commit(s, 'templates', { ...template, archived: true });
+}
+
+/**
+ * Move a template up (`delta` -1) or down (+1) among the active ones, then
+ * number them 0..n. Returns the same object when it cannot move.
+ */
+function moveTemplate(s, id, delta) {
+  const list = activeTemplates(s);
+  const from = list.findIndex(t => t.id === id), to = from + delta;
+  if (from < 0 || to < 0 || to >= list.length || !delta) return s;
+  list.splice(to, 0, list.splice(from, 1)[0]);
+  const operations = list
+    .map((t, index) => (t.order === index ? null : { table: 'templates', record: { ...t, order: index } }))
+    .filter(Boolean);
+  return operations.length ? commitBatch(s, operations) : s;
+}
+
+/**
+ * What a template puts in the Today form. `amount` is '' when it is asked for
+ * each time; `account` is null when the form's own choice should stay.
+ */
+function templatePrefill(s, t) {
+  const fixed = t.amount && t.modes?.amount !== 'prompt';
+  return {
+    category: s.categories.some(c => c.id === t.category) ? t.category : '',
+    currency: t.currency,
+    amount: fixed ? t.amount : '',
+    account: t.account && s.accounts.some(a => a.id === t.account) ? t.account : null,
+    note: t.note || ''
+  };
+}
+
 // ---- reports-view.js ----
 // Reports: the figures behind the Reports tab. Pure functions, no DOM.
 //
@@ -6677,6 +6872,7 @@ function initThemeToggle(button) {
 
 
 
+
 /** `ledger.state` is the current, validated ledger. */
 const ledger = { state: null, store: null };
 
@@ -6692,7 +6888,8 @@ async function openLedger() {
   ledger.store = new LedgerStore();
   ledger.state = await ledger.store.open(todayIso());
 
-  const upgraded = ensureDocumentedCategories(ledger.state);
+  // Default categories first: the starting Quick add templates point at them.
+  const upgraded = ensureDefaultTemplates(ensureDocumentedCategories(ledger.state));
   if (upgraded !== ledger.state) {
     await ledger.store.write(upgraded, ledger.state.revision);
     ledger.state = upgraded;
@@ -8224,6 +8421,8 @@ function buildTransferForm(state, today, editing, { onSaved = () => {}, onCancel
 
 
 
+
+
 const RECENT_LIMIT = 40;
 const MORE_CURRENCIES = '__more';
 
@@ -8537,6 +8736,38 @@ function buildEntryForm(state, today, editing) {
     todayDraft.currency = currentCurrency;
   });
 
+  // --- Quick add: saved templates as chips. Tapping one fills the form and
+  // redraws it; nothing is saved until Save, so every check still runs.
+  const templates = !editing && !isIncome ? activeTemplates(state) : [];
+  function useTemplate(template) {
+    const fill = templatePrefill(ledger.state, template);
+    // A currency no longer active: the form uses the usual one, so its amount would mean something else.
+    if (!ledger.state.settings.activeCurrencies.includes(fill.currency)) fill.amount = '';
+    todayDraft.kept = {
+      ...keepForm(), date: today, amount: fill.amount, note: fill.note, category: fill.category,
+      settled: '', settledState: 'auto', // re-estimated for the new amount and currency
+      ...(fill.account === null ? {} : { account: fill.account })
+    };
+    todayDraft.currency = fill.currency;
+    closePopover({ restoreFocus: false });
+    rerenderToday();
+    // Asked each time: go to the amount. Fixed: Save is the only step left.
+    const target = fill.amount
+      ? document.querySelector('.entry-form button[type="submit"]')
+      : document.getElementById('entry-amount');
+    target?.focus();
+  }
+  const quickAdd = templates.length > 0 && el('div', { class: 'quick-add', role: 'group', 'aria-label': 'Quick add' },
+    el('span', { class: 'field-label quick-add-label', text: 'Quick add' }),
+    el('div', { class: 'quick-add-row' },
+      templates.map(template => {
+        const fixed = templateAmountLabel(template);
+        return el('button', { type: 'button', class: 'quick-chip', onclick: () => useTemplate(template) },
+          el('span', { text: template.name }),
+          fixed && el('span', { class: 'quick-chip-amount', text: fixed }));
+      }),
+      el('a', { class: 'quick-chip quick-chip-edit', href: '#settings/quick-add', text: 'Edit', 'aria-label': 'Edit quick add templates' })));
+
   const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
   const saveButton = el('button', { type: 'submit', class: 'btn-primary', text: editing ? 'Save changes' : isIncome ? 'Save income' : 'Save expense' });
 
@@ -8643,6 +8874,7 @@ function buildEntryForm(state, today, editing) {
   return el('form', { class: 'entry-form', onsubmit: submit, novalidate: true },
     kindSwitch,
     sectionTitle(editing ? (isIncome ? 'Edit income' : 'Edit expense') : isIncome ? 'Add income' : 'Add an expense'),
+    quickAdd,
     el('div', { class: 'field' },
       el('label', { for: 'entry-amount', text: 'Amount' }),
       el('div', { class: 'amount-row' }, amount)),
@@ -9951,6 +10183,158 @@ function estimateForm(state, estimate, rerender) {
       })));
 }
 
+// ---- ui/quick-add-settings.js ----
+// Settings → Quick add: the templates shown as chips above the Today form.
+
+
+
+
+
+
+
+// View state kept between re-renders: the template being edited.
+const quickAddView = { editingId: '' };
+
+/** A template's fixed amount as money ("£50.00"), or '' when it is asked for each time. */
+function templateAmountLabel(template) {
+  if (!template.amount) return '';
+  try {
+    return formatMoney(parseAmount(template.amount, template.currency), template.currency, digits(template.currency));
+  } catch {
+    return `${template.amount} ${template.currency}`;
+  }
+}
+
+function buildQuickAddSettings(rerender) {
+  const state = ledger.state;
+  const templates = activeTemplates(state);
+
+  /** Save, redraw, and show a failure as a toast instead of losing it. */
+  async function apply(next, done) {
+    try {
+      await saveLedger(next);
+      rerender();
+      if (done) showToast(done);
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  }
+
+  /** Two presses: the first asks, the second archives. */
+  function archiveButton(template) {
+    let armed = false;
+    const button = el('button', { type: 'button', class: 'btn-text', text: 'Archive', 'aria-label': `Archive the template ${template.name}` });
+    button.addEventListener('blur', () => { armed = false; button.textContent = 'Archive'; button.classList.remove('is-armed'); });
+    button.addEventListener('click', () => {
+      if (!armed) {
+        armed = true;
+        button.textContent = 'Press again to archive';
+        button.classList.add('is-armed');
+        return;
+      }
+      if (quickAddView.editingId === template.id) quickAddView.editingId = '';
+      apply(archiveTemplate(ledger.state, template.id), 'Template archived.');
+    });
+    return button;
+  }
+
+  const list = templates.length
+    ? el('ul', { class: 'plain-list ed-list' }, templates.map((template, index) => {
+        const moveButton = (direction, symbol, word) => el('button', {
+          type: 'button', class: 'icon-btn', text: symbol,
+          'aria-label': `Move ${template.name} ${word}`, 'data-focus': `qa-${word}:${template.id}`,
+          disabled: direction < 0 ? index === 0 : index === templates.length - 1,
+          onclick: () => apply(moveTemplate(ledger.state, template.id, direction))
+        });
+        const editing = quickAddView.editingId === template.id;
+        return el('li', { class: 'ed-item' },
+          el('div', { class: 'ed-row' },
+            el('span', { class: 'ed-name' },
+              el('span', { class: 'ed-name-text' }, el('strong', { text: template.name })),
+              el('span', { class: 'ed-meta', text: `${categoryPath(state, template.category).replaceAll(' / ', ' › ') || 'No category'} · ${templateAmountLabel(template) || 'asks each time'}` })),
+            el('div', { class: 'ed-actions' },
+              moveButton(-1, '↑', 'up'),
+              moveButton(1, '↓', 'down'),
+              el('button', {
+                type: 'button', class: 'btn-text', text: 'Edit', 'aria-label': `Edit the template ${template.name}`,
+                'aria-expanded': String(editing), 'data-focus': `qa-edit:${template.id}`,
+                onclick: () => { quickAddView.editingId = editing ? '' : template.id; rerender(); }
+              }),
+              archiveButton(template))),
+          editing && quickAddForm(state, template, rerender));
+      }))
+    : el('p', { class: 'empty', text: 'No templates. Add one below to record a regular purchase in two taps.' });
+
+  return el('div', {},
+    el('p', { class: 'note', text: 'Shortcuts shown above the amount on Today. Tapping one fills the form; nothing is saved until you press Save.' }),
+    list,
+    el('details', { class: 'fold' },
+      el('summary', { text: 'Add a template' }),
+      quickAddForm(state, null, rerender)));
+}
+
+/** The form for a new template (`template` null) or an existing one. */
+function quickAddForm(state, template, rerender) {
+  const key = template ? template.id.replace(/[^a-z0-9-]/gi, '-') : 'new';
+  const name = el('input', { id: `qa-name-${key}`, type: 'text', maxLength: 150, value: template?.name || '' });
+  const amount = el('input', {
+    id: `qa-amount-${key}`, type: 'text', inputMode: 'decimal', autocomplete: 'off', value: template?.amount || ''
+  });
+  const code = template?.currency || state.settings.reportingCurrency;
+  const currencySelect = el('select', { id: `qa-currency-${key}` },
+    [...new Set([...state.settings.activeCurrencies, code])].map(value => el('option', { value, text: value })));
+  currencySelect.value = code;
+  const categories = state.categories.filter(c => c.kind === 'expense' && (!c.archived || c.id === template?.category))
+    .map(c => ({ id: c.id, path: categoryPath(state, c.id).replaceAll(' / ', ' › ') }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const category = el('select', { id: `qa-category-${key}` },
+    el('option', { value: '', text: 'Choose a category' }),
+    categories.map(c => el('option', { value: c.id, text: c.path })));
+  category.value = template?.category || '';
+  const account = el('select', { id: `qa-account-${key}` },
+    el('option', { value: '', text: 'Use the usual account' }),
+    state.accounts.filter(a => !a.archived || a.id === template?.account)
+      .map(a => el('option', { value: a.id, text: `${a.name} (${a.currency})` })));
+  account.value = template?.account || '';
+  const note = el('input', { id: `qa-note-${key}`, type: 'text', maxLength: 500, value: template?.note || '' });
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+
+  async function submit(event) {
+    event.preventDefault();
+    try {
+      const next = saveTemplate(ledger.state, {
+        id: template?.id, name: name.value, category: category.value, amount: amount.value,
+        currency: currencySelect.value, account: account.value, note: note.value
+      });
+      quickAddView.editingId = '';
+      await saveLedger(next);
+      rerender();
+      showToast(template ? 'Template saved.' : 'Template added.');
+    } catch (error) {
+      errorBox.textContent = errorMessage(error);
+      errorBox.hidden = false;
+    }
+  }
+
+  // Name, category, amount and currency sit in the same columns as the Estimates form.
+  const field = (control, label, place, hint) => el('div', { class: `field${place ? ' est-' + place : ''}` },
+    el('label', { for: control.id, text: label }), control, hint && el('p', { class: 'hint', text: hint }));
+  return el('form', { class: template ? 'ed-edit' : 'fold-body', onsubmit: submit, novalidate: true },
+    el('div', { class: 'est-form' },
+      field(name, 'Name', 'name'),
+      field(category, 'Category', 'category'),
+      field(amount, 'Amount', 'amount'),
+      field(currencySelect, 'Currency', 'currency')),
+    el('p', { class: 'hint', text: 'Leave the amount blank to type it each time.' }),
+    field(account, 'Paid from (optional)'),
+    field(note, 'Note (optional)'),
+    el('p', { class: 'hint', text: 'Change the amount here when a price goes up; past entries keep their price.' }),
+    errorBox,
+    el('div', { class: 'ed-edit-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: template ? 'Save' : 'Add template' }),
+      template && el('button', { type: 'button', class: 'btn-text', text: 'Cancel', onclick: () => { quickAddView.editingId = ''; rerender(); } })));
+}
+
 // ---- ui/pots-settings.js ----
 // Settings → Pots (add, rename, icon, archive, and the rollover switch per
 // pot) and the payday flow part of Settings → Payday.
@@ -10254,9 +10638,10 @@ function buildPaydayFlowSettings() {
 
 // ---- ui/settings.js ----
 // Settings, one section at a time: accounts, currencies,
-// categories, pots, payday, estimates, sync, and the way back to the previous version.
+// categories, pots, payday, estimates, quick add, sync, and the way back to the previous version.
 // Each section has its own address (#settings/estimates), so Back and a
 // reload return to it.
+
 
 
 
@@ -10289,6 +10674,7 @@ const SECTIONS = [
   { id: 'pots', label: 'Pots', build: rerender => [buildPotsSettings(rerender)] },
   { id: 'payday', label: 'Payday', build: () => [buildPaydaySettings(), sectionTitle('Payday flow'), buildPaydayFlowSettings()] },
   { id: 'estimates', label: 'Estimates', build: rerender => [buildEstimates(rerender)] },
+  { id: 'quick-add', label: 'Quick add', build: rerender => [buildQuickAddSettings(rerender)] },
   { id: 'sync', label: 'Sync', title: 'Google Sheets sync', build: rerender => [buildSync(rerender)] },
   {
     id: 'data', label: 'Data', title: 'Previous version', build: () => [

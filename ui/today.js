@@ -15,6 +15,8 @@ import { askNegativePot, openPaydayPreview } from './pots.js';
 import { accountIconNode } from './pixel-icons.js';
 import { buildTransferForm } from './transfer.js';
 import { transferParts, hasSourceFee } from '../transfer-logic.js';
+import { activeTemplates, templatePrefill } from '../templates-logic.js';
+import { templateAmountLabel } from './quick-add-settings.js';
 import { saveRefund, deleteRefund, refundedSoFar, canRefundHere, suggestedSettled } from '../refund-logic.js';
 
 const RECENT_LIMIT = 40;
@@ -330,6 +332,38 @@ function buildEntryForm(state, today, editing) {
     todayDraft.currency = currentCurrency;
   });
 
+  // --- Quick add: saved templates as chips. Tapping one fills the form and
+  // redraws it; nothing is saved until Save, so every check still runs.
+  const templates = !editing && !isIncome ? activeTemplates(state) : [];
+  function useTemplate(template) {
+    const fill = templatePrefill(ledger.state, template);
+    // A currency no longer active: the form uses the usual one, so its amount would mean something else.
+    if (!ledger.state.settings.activeCurrencies.includes(fill.currency)) fill.amount = '';
+    todayDraft.kept = {
+      ...keepForm(), date: today, amount: fill.amount, note: fill.note, category: fill.category,
+      settled: '', settledState: 'auto', // re-estimated for the new amount and currency
+      ...(fill.account === null ? {} : { account: fill.account })
+    };
+    todayDraft.currency = fill.currency;
+    closePopover({ restoreFocus: false });
+    rerenderToday();
+    // Asked each time: go to the amount. Fixed: Save is the only step left.
+    const target = fill.amount
+      ? document.querySelector('.entry-form button[type="submit"]')
+      : document.getElementById('entry-amount');
+    target?.focus();
+  }
+  const quickAdd = templates.length > 0 && el('div', { class: 'quick-add', role: 'group', 'aria-label': 'Quick add' },
+    el('span', { class: 'field-label quick-add-label', text: 'Quick add' }),
+    el('div', { class: 'quick-add-row' },
+      templates.map(template => {
+        const fixed = templateAmountLabel(template);
+        return el('button', { type: 'button', class: 'quick-chip', onclick: () => useTemplate(template) },
+          el('span', { text: template.name }),
+          fixed && el('span', { class: 'quick-chip-amount', text: fixed }));
+      }),
+      el('a', { class: 'quick-chip quick-chip-edit', href: '#settings/quick-add', text: 'Edit', 'aria-label': 'Edit quick add templates' })));
+
   const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
   const saveButton = el('button', { type: 'submit', class: 'btn-primary', text: editing ? 'Save changes' : isIncome ? 'Save income' : 'Save expense' });
 
@@ -436,6 +470,7 @@ function buildEntryForm(state, today, editing) {
   return el('form', { class: 'entry-form', onsubmit: submit, novalidate: true },
     kindSwitch,
     sectionTitle(editing ? (isIncome ? 'Edit income' : 'Edit expense') : isIncome ? 'Add income' : 'Add an expense'),
+    quickAdd,
     el('div', { class: 'field' },
       el('label', { for: 'entry-amount', text: 'Amount' }),
       el('div', { class: 'amount-row' }, amount)),
