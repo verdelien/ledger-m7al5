@@ -9,6 +9,7 @@ import { digits, validDate } from './domain.js';
 import { amountFor, accountBalance, potBalance, seedEstimates, DEFAULT_FORECAST_POTS } from './model.js';
 import { divideRounded, rateParts } from './money.js';
 import { occurrences } from './planning.js';
+import { repaymentEstimate } from './card-repayment-logic.js';
 import { spendingRows, withinCategory } from './features.js';
 import { nextPayday } from './payday.js';
 
@@ -147,8 +148,9 @@ export function estimateTrust(s, today) {
  * Planned entries between `from` and `to`, plus the schedule dates from
  * `asOf` onwards that have no entry yet. Nothing is written: a schedule date
  * is returned as an entry-shaped item with `virtual: true`.
- * A card repayment that has no entry yet is estimated from the card's debt
- * on `asOf` (`estimated: true`), once per schedule, as the model does.
+ * A card repayment that has no entry yet is estimated by its own rule (last
+ * month's spending, or the full balance) as seen on `asOf` (`estimated: true`),
+ * once per schedule: the first date that has something to pay.
  * Each item carries `label`, a readable name.
  */
 export function plannedItems(s, from, to, asOf) {
@@ -181,9 +183,10 @@ export function plannedItems(s, from, to, asOf) {
         let entry = version?.entry || rule.entry;
         let estimated = false;
         if (rule.repayment) {
-          const debt = s.accounts.some(a => a.id === entry.toAccount) ? -accountBalance(s, entry.toAccount, asOf) : 0n;
-          if (debt <= 0n) break;
-          entry = { ...entry, minor: Number(debt), receivedMinor: Number(debt) };
+          // Nothing to pay for this date (no spending in its month): try the next one.
+          const due = Number(repaymentEstimate(s, rule, date, asOf).minor);
+          if (due <= 0) continue;
+          entry = { ...entry, minor: due, receivedMinor: due };
           estimated = true;
         }
         items.push({ ...entry, id, date, status: 'planned', schedule: rule.id, ledger: 'active', virtual: true, estimated, label: rule.name || label(entry) });

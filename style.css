@@ -3593,3 +3593,8 @@ g.rp-mark:focus-visible > .rp-hit {
 .due-item .list-row {
   border-bottom: 0;
 }
+
+/* Due items: the meta line explains the amount, so it wraps instead of being cut off. */
+.due-item .entry-meta {
+  white-space: normal;
+}

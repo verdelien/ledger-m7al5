@@ -3617,6 +3617,11 @@ g.rp-mark:focus-visible > .rp-hit {
 .due-item .list-row {
   border-bottom: 0;
 }
+
+/* Due items: the meta line explains the amount, so it wraps instead of being cut off. */
+.due-item .entry-meta {
+  white-space: normal;
+}
 </style>
 </head>
 <body>
@@ -4165,6 +4170,260 @@ function potProjection(s,id,from,to){const pot=s.pots.find(p=>p.id===id);if(!pot
 function withinCategory(s,id,parent){if(!parent)return true;const seen=new Set();while(id){if(id===parent)return true;if(seen.has(id))return false;seen.add(id);id=s.categories.find(c=>c.id===id)?.parent;}return false;}
 function recurringSuggestions(s){const groups=new Map();for(const e of s.entries.filter(e=>e.ledger==='active'&&e.status==='posted'&&['income','expense'].includes(e.kind)&&e.note&&!e.schedule&&!e.friend&&!e.splits)){const key=[e.kind,e.account,e.category,e.currency,e.minor,e.note.trim().toLowerCase()].join('|');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(e);}const suggestions=[];for(const[key,entries]of groups){if(entries.length<3||s.settings.dismissedSuggestions?.includes(key))continue;const rows=entries.sort((a,b)=>a.date.localeCompare(b.date)),last=rows.slice(-3),gaps=[1,2].map(i=>(new Date(last[i].date+'T12:00:00Z')-new Date(last[i-1].date+'T12:00:00Z'))/86400000);const frequency=gaps.every(d=>d>=6&&d<=8)?'weekly':gaps.every(d=>d>=26&&d<=35)?'monthly':null;if(frequency&&!s.schedules.some(r=>r.name===last[2].note))suggestions.push({key,frequency,entry:last[2]});}return suggestions;}
 
+// ---- card-repayment-logic.js ----
+// Credit-card repayments: what to pay, and the yes or no that records it.
+// Pure functions over the ledger state; nothing here touches the page.
+//
+// A repayment rule is a schedule with `repayment: true` whose entry is a
+// transfer from a bank account to the card (the shape the previous version
+// also reads). Its amount is never fixed and never posted automatically:
+//   - "last month's spending" (default): what was charged to the card in the
+//     whole calendar month before the due date, never more than is owed today;
+//   - "full balance" (`rule.repaymentBasis: 'balance'`): everything owed today.
+// The user approves every repayment. Approving writes the posted transfer
+// `scheduled:<ruleId>:<dueDate>`; skipping writes it as cancelled.
+
+
+
+
+
+const REPAYMENT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const repaymentPad = n => String(n).padStart(2, '0');
+const repaymentEntryId = (ruleId, date) => `scheduled:${ruleId}:${date}`;
+
+function repaymentShiftDays(iso, count) {
+  const dt = new Date(iso + 'T12:00:00Z');
+  dt.setUTCDate(dt.getUTCDate() + count);
+  return dt.toISOString().slice(0, 10);
+}
+
+function repaymentRuleOf(s, ruleId) {
+  const rule = s.schedules.find(r => r.id === ruleId);
+  if (!rule || !rule.repayment) throw Error('That card repayment no longer exists.');
+  return rule;
+}
+
+/** 'last-month' unless the rule says 'balance'. */
+function repaymentBasis(rule) {
+  return rule?.repaymentBasis === 'balance' ? 'balance' : 'last-month';
+}
+
+/** The whole calendar month before the month `dueDate` falls in: { from, to }. */
+function statementPeriod(dueDate) {
+  if (!validDate(dueDate)) throw Error('The due date is not valid.');
+  const [year, month] = dueDate.split('-').map(Number);
+  const y = month === 1 ? year - 1 : year, m = month === 1 ? 12 : month - 1;
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: `${y}-${repaymentPad(m)}-01`, to: `${y}-${repaymentPad(m)}-${repaymentPad(last)}` };
+}
+
+/** "1–30 Nov" for a period inside one month. */
+function periodWords(period) {
+  const [, month, first] = period.from.split('-').map(Number);
+  return `${first}–${Number(period.to.slice(8))} ${REPAYMENT_MONTHS[month - 1]}`;
+}
+
+/** "last month's spending (1–30 Nov)" or "full balance". */
+function basisWords(basis, period) {
+  if (basis === 'balance') return 'full balance';
+  return period ? `last month's spending (${periodWords(period)})` : 'last month\'s spending';
+}
+
+/**
+ * Net charges on a card between `from` and `to` (inclusive), in the card's
+ * currency: spending less refunds. Money paid onto the card in the period
+ * (repayments) does not reduce the figure. Never below zero.
+ */
+function cardCharges(s, cardId, from, to) {
+  const before = accountBalance(s, cardId, repaymentShiftDays(from, -1));
+  const after = accountBalance(s, cardId, to);
+  let paidIn = 0n;
+  for (const e of s.entries) {
+    if (e.kind === 'transfer' && e.toAccount === cardId && e.status === 'posted' && e.ledger === 'active' && e.date >= from && e.date <= to) {
+      paidIn += BigInt(e.receivedMinor);
+    }
+  }
+  const charges = before - after + paidIn;
+  return charges > 0n ? charges : 0n;
+}
+
+/**
+ * What a rule would pay for `dueDate`, seen from `today`:
+ * { minor, basis, period, debt } with BigInt amounts in the card's currency.
+ * `debt` is what the card owes today. "Last month's spending" is capped at it.
+ */
+function repaymentEstimate(s, rule, dueDate, today) {
+  const basis = repaymentBasis(rule);
+  const period = statementPeriod(dueDate);
+  const cardId = rule.entry?.toAccount;
+  if (!s.accounts.some(a => a.id === cardId)) return { minor: 0n, basis, period, debt: 0n };
+  const balance = accountBalance(s, cardId, today);
+  const debt = balance < 0n ? -balance : 0n;
+  if (basis === 'balance') return { minor: debt, basis, period, debt };
+  const charges = cardCharges(s, cardId, period.from, period.to);
+  return { minor: charges < debt ? charges : debt, basis, period, debt };
+}
+
+/**
+ * Repayments waiting for approval: every due date from each rule's first
+ * date up to `daysAhead` days after `today` that has not been paid or
+ * skipped. Oldest first. Each item:
+ *   { rule, date, id, existing, estimate, basis, period, from, card }
+ * `existing` is a planned entry the previous version wrote, or null.
+ * `estimate` is a number of minor units: the figure the user already
+ * confirmed there, otherwise the estimate. Dates with nothing to pay are
+ * left out. A card's open items together never ask for more than it owes:
+ * each one is capped at the debt the earlier ones leave.
+ */
+function upcomingRepayments(s, today, daysAhead = 7) {
+  if (!validDate(today)) throw Error('Today\'s date is not valid.');
+  const horizon = repaymentShiftDays(today, daysAhead);
+  const deleted = new Set(s.trash.filter(t => t.table === 'entries' && t.record).map(t => t.record.id));
+  const byId = new Map(s.entries.map(e => [e.id, e]));
+  const remaining = new Map(); // card id → debt not yet claimed by an earlier item
+  const items = [];
+  for (const rule of s.schedules) {
+    if (!rule.repayment || rule.archived || !rule.entry || rule.start > horizon) continue;
+    const from = s.accounts.find(a => a.id === rule.entry.account);
+    const card = s.accounts.find(a => a.id === rule.entry.toAccount);
+    if (!from || !card) continue;
+    for (const date of occurrences(rule, rule.start, horizon)) {
+      const id = repaymentEntryId(rule.id, date);
+      const found = byId.get(id);
+      if (deleted.has(id) || (found && found.status !== 'planned')) continue;
+      if (s.settings.closedQuarters?.includes(quarter(date))) continue;
+      const existing = found || null;
+      const { minor, basis, period, debt } = repaymentEstimate(s, rule, date, today);
+      if (!remaining.has(card.id)) remaining.set(card.id, debt);
+      const left = remaining.get(card.id);
+      const confirmed = Boolean(existing?.amountConfirmed);
+      const amount = confirmed ? BigInt(existing.minor) : (minor < left ? minor : left);
+      if (amount <= 0n) continue;
+      remaining.set(card.id, left > amount ? left - amount : 0n);
+      items.push({ rule, date, id, existing, estimate: Number(amount), basis, period, from, card });
+    }
+  }
+  return items.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+}
+
+/** Accepts the entry ID `scheduled:<ruleId>:<date>` or { ruleId, date }. */
+function repaymentRef(ref) {
+  if (typeof ref === 'string') {
+    const match = /^scheduled:(.+):(\d{4}-\d{2}-\d{2})$/.exec(ref);
+    if (!match) throw Error('That card repayment no longer exists.');
+    return { ruleId: match[1], date: match[2] };
+  }
+  return { ruleId: ref?.ruleId, date: ref?.date };
+}
+
+function repaymentTarget(s, ref) {
+  const { ruleId, date: dueDate } = repaymentRef(ref);
+  const rule = repaymentRuleOf(s, ruleId);
+  if (!validDate(dueDate)) throw Error('The due date is not valid.');
+  const from = s.accounts.find(a => a.id === rule.entry.account);
+  const card = s.accounts.find(a => a.id === rule.entry.toAccount);
+  if (!from || !card) throw Error('The accounts for this card repayment no longer exist. Edit it in Settings → Recurring.');
+  const id = repaymentEntryId(rule.id, dueDate);
+  const existing = s.entries.find(e => e.id === id);
+  if (existing?.status === 'posted') throw Error('That repayment has already been recorded.');
+  if (existing?.status === 'cancelled') throw Error('That repayment was skipped.');
+  if (s.trash.some(t => t.table === 'entries' && t.record?.id === id)) throw Error('That repayment was deleted. Restore it first, or record a transfer instead.');
+  return { rule, dueDate, from, card, id };
+}
+
+function repaymentEntry({ rule, from, card, id }, fields) {
+  return {
+    kind: 'transfer', currency: from.currency, precision: from.precision, account: from.id, toAccount: card.id,
+    category: '', pot: '', trip: '', note: rule.entry.note || rule.name, tags: 'repayment', ledger: 'active',
+    id, schedule: rule.id, ...fields
+  };
+}
+
+/**
+ * Approve a repayment: the transfer is posted for `minor` on `date` (today or
+ * earlier; the due date when that has passed, otherwise today).
+ */
+function confirmRepayment(s, ref, { minor, date, today } = {}) {
+  const target = repaymentTarget(s, ref);
+  if (!Number.isSafeInteger(minor) || minor <= 0) throw Error('Enter an amount above zero.');
+  const day = date ?? (today && target.dueDate > today ? today : target.dueDate);
+  if (!validDate(day)) throw Error('Choose the date it was paid.');
+  if (today && day > today) throw Error('The date cannot be in the future.');
+  if (day < target.card.openingDate) throw Error(`${target.card.name} was opened on ${target.card.openingDate}. Choose that date or later.`);
+  return commit(s, 'entries', repaymentEntry(target, {
+    status: 'posted', date: day, minor, receivedMinor: minor, amountConfirmed: true, valuationStatus: 'confirmed'
+  }));
+}
+
+/** Say a repayment will not be made for this due date. It is never asked for again. */
+function skipRepayment(s, ruleId, dueDate) {
+  const target = repaymentTarget(s, { ruleId, date: dueDate });
+  const minor = Number.isSafeInteger(target.rule.entry.minor) && target.rule.entry.minor > 0 ? target.rule.entry.minor : 1;
+  return commit(s, 'entries', repaymentEntry(target, {
+    status: 'cancelled', cancelReason: 'skipped', date: dueDate, minor, receivedMinor: minor, amountConfirmed: false
+  }));
+}
+
+/**
+ * Add a card repayment, or change one (`fields.id` set):
+ * { id?, card, from, start, basis }. Due monthly on the day of `start`.
+ */
+function saveCardRepayment(s, fields, today) {
+  const old = fields.id ? s.schedules.find(r => r.id === fields.id) : null;
+  if (fields.id && (!old || !old.repayment)) throw Error('That card repayment no longer exists.');
+  const card = s.accounts.find(a => a.id === fields.card);
+  if (!card || card.type !== 'credit_card') throw Error('Choose the credit card to repay.');
+  const from = s.accounts.find(a => a.id === fields.from);
+  if (!from) throw Error('Choose the account the repayment is paid from.');
+  if (from.id === card.id) throw Error('Choose a different account to pay from; a card cannot repay itself.');
+  if (from.currency !== card.currency || from.precision !== card.precision) {
+    throw Error(`${from.name} is in ${from.currency} but ${card.name} is in ${card.currency}. Choose an account in ${card.currency}.`);
+  }
+  const start = String(fields.start ?? '');
+  if (!validDate(start)) throw Error('Choose the first due date.');
+  const basis = fields.basis === 'balance' ? 'balance' : 'last-month';
+  if (s.schedules.some(r => r.repayment && !r.archived && r.id !== old?.id && r.entry?.toAccount === card.id)) {
+    throw Error(`${card.name} already has a repayment. Edit that one instead.`);
+  }
+  const name = `${card.name} repayment`;
+  const accounts = { account: from.id, toAccount: card.id, currency: from.currency, precision: from.precision };
+  let rule;
+  if (old) {
+    const sameCard = old.entry.toAccount === card.id;
+    rule = {
+      ...old, name: sameCard ? old.name : name, start, autoPost: false, repaymentBasis: basis,
+      entry: { ...old.entry, ...accounts, date: start, note: sameCard ? old.entry.note : name }
+    };
+    if (old.end && old.end < start) rule.end = '';
+    if (old.versions) rule.versions = old.versions.map(v => ({ ...v, entry: { ...v.entry, ...accounts } }));
+  } else {
+    rule = {
+      id: uid(), name, repayment: true, repaymentBasis: basis, start, end: '', frequency: 'monthly', interval: 1, anchor: 'day',
+      holidays: [], autoPost: false, archived: false,
+      // The amount is worked out each month; 1 is only a placeholder the format requires.
+      entry: {
+        kind: 'transfer', status: 'planned', date: start, minor: 1, receivedMinor: 1, ...accounts,
+        category: '', pot: '', trip: '', note: name, tags: 'repayment', ledger: 'active'
+      }
+    };
+  }
+  return commit(s, 'schedules', rule);
+}
+
+/** Pause or resume a card repayment. Pausing cancels entries still waiting; paid ones stay. */
+function setCardRepaymentPaused(s, ruleId, paused) {
+  const rule = repaymentRuleOf(s, ruleId);
+  if (Boolean(rule.archived) === Boolean(paused)) return s;
+  const operations = [{ table: 'schedules', record: { ...rule, archived: Boolean(paused) } }];
+  if (paused) {
+    for (const e of s.entries) {
+      if (e.schedule !== rule.id || e.status !== 'planned' || s.settings.closedQuarters?.includes(quarter(e.date))) continue;
+      operations.push({ table: 'entries', record: { ...e, status: 'cancelled', amountConfirmed: false, cancelReason: 'paused' } });
+    }
+  }
+  return commitBatch(s, operations);
+}
+
 // ---- forecast-view.js ----
 // Everything the Calendar and Forecast screens calculate. Pure functions over
 // the ledger state: nothing here saves, reads the clock or touches the page.
@@ -4172,6 +4431,7 @@ function recurringSuggestions(s){const groups=new Map();for(const e of s.entries
 // Money is integer minor units (BigInt while summing). Currencies are never
 // added together: an amount with no evidence of its value in the wanted
 // currency is kept apart and reported as "not counted".
+
 
 
 
@@ -4315,8 +4575,9 @@ function estimateTrust(s, today) {
  * Planned entries between `from` and `to`, plus the schedule dates from
  * `asOf` onwards that have no entry yet. Nothing is written: a schedule date
  * is returned as an entry-shaped item with `virtual: true`.
- * A card repayment that has no entry yet is estimated from the card's debt
- * on `asOf` (`estimated: true`), once per schedule, as the model does.
+ * A card repayment that has no entry yet is estimated by its own rule (last
+ * month's spending, or the full balance) as seen on `asOf` (`estimated: true`),
+ * once per schedule: the first date that has something to pay.
  * Each item carries `label`, a readable name.
  */
 function plannedItems(s, from, to, asOf) {
@@ -4349,9 +4610,10 @@ function plannedItems(s, from, to, asOf) {
         let entry = version?.entry || rule.entry;
         let estimated = false;
         if (rule.repayment) {
-          const debt = s.accounts.some(a => a.id === entry.toAccount) ? -accountBalance(s, entry.toAccount, asOf) : 0n;
-          if (debt <= 0n) break;
-          entry = { ...entry, minor: Number(debt), receivedMinor: Number(debt) };
+          // Nothing to pay for this date (no spending in its month): try the next one.
+          const due = Number(repaymentEstimate(s, rule, date, asOf).minor);
+          if (due <= 0) continue;
+          entry = { ...entry, minor: due, receivedMinor: due };
           estimated = true;
         }
         items.push({ ...entry, id, date, status: 'planned', schedule: rule.id, ledger: 'active', virtual: true, estimated, label: rule.name || label(entry) });
@@ -8665,6 +8927,7 @@ function buildTransferForm(state, today, editing, { onSaved = () => {}, onCancel
 
 
 
+
 /** "Posted 2 recurring payments: Rent (Sun 1 Nov) £950.00, Phone (Thu 5 Nov) £12.00." At most three are named. */
 function recurringPostedText(state, posted, today) {
   const parts = [];
@@ -8674,7 +8937,7 @@ function recurringPostedText(state, posted, today) {
     const more = entries.length - named.length;
     parts.push(`Posted ${entries.length} recurring payment${entries.length === 1 ? '' : 's'}: ${named.join(', ')}${more > 0 ? ` and ${more} more` : ''}.`);
   }
-  const waiting = dueToConfirm(state, today).length;
+  const waiting = dueToConfirm(state, today).length + upcomingRepayments(state, today).length;
   if (waiting) parts.push(`${waiting} to confirm on Today.`);
   return parts.join(' ');
 }
@@ -8695,12 +8958,29 @@ async function runRecurringOnOpen() {
   }
 }
 
-/** Today: recurring payments waiting for a yes or no. Null when there are none. */
+/** Today: recurring payments and card repayments waiting for a yes or no. Null when there are none. */
 function buildDueToConfirm(state, today) {
   const due = dueToConfirm(state, today);
-  if (!due.length) return null;
+  const repayments = upcomingRepayments(state, today);
+  if (!due.length && !repayments.length) return null;
   return el('div', { class: 'due' },
     sectionTitle('Due to confirm'),
+    repayments.map(item => {
+      const name = `${item.card.name} repayment`;
+      const meta = `Due ${formatDay(item.date)} · from ${item.from.name} · ${basisWords(item.basis, item.period)}`;
+      return el('div', { class: 'due-item' },
+        el('div', { class: 'list-row' },
+          el('span', { class: 'entry-text' },
+            el('span', { class: 'entry-title', text: name }),
+            el('span', { class: 'entry-meta', text: meta })),
+          el('span', { class: 'entry-amount', text: formatMoney(-item.estimate, item.from.currency, item.from.precision, { signed: true }) })),
+        el('div', { class: 'entry-actions' },
+          el('button', {
+            type: 'button', class: 'btn-primary btn-small', text: 'Confirm', 'aria-label': `Confirm ${name}, due ${formatDay(item.date)}`,
+            onclick: event => openConfirmRepaymentSheet(event.currentTarget, item, name)
+          }),
+          skipDueButton({ date: item.date }, name, () => skipRepayment(ledger.state, item.rule.id, item.date))));
+    }),
     due.map(entry => {
       const rule = state.schedules.find(r => r.id === entry.schedule);
       const name = rule?.name || entry.note || 'Recurring payment';
@@ -8725,7 +9005,7 @@ function buildDueToConfirm(state, today) {
 }
 
 /** Two presses: the first asks, the second skips this date. */
-function skipDueButton(entry, name) {
+function skipDueButton(entry, name, skip = () => skipDue(ledger.state, entry.id)) {
   let armed = false;
   const button = el('button', { type: 'button', class: 'btn-text', text: 'Skip', 'aria-label': `Skip ${name}, ${formatDay(entry.date)}` });
   button.addEventListener('blur', () => { armed = false; button.textContent = 'Skip'; button.classList.remove('is-armed'); });
@@ -8737,7 +9017,7 @@ function skipDueButton(entry, name) {
       return;
     }
     try {
-      await saveLedger(skipDue(ledger.state, entry.id));
+      await saveLedger(skip());
       showToast(`${name} skipped for ${formatDay(entry.date)}.`);
     } catch (error) {
       showToast(errorMessage(error));
@@ -8775,6 +9055,47 @@ function openConfirmDueSheet(anchor, entry, name, rule) {
   },
     dueField(amount, `Amount (${entry.currency})`),
     dueField(date, entry.kind === 'income' ? 'Date received' : 'Date paid'),
+    errorBox,
+    el('div', { class: 'entry-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: 'Confirm' })));
+
+  openPopover({ anchor, label: `Confirm ${name}`, role: 'dialog', content: form });
+}
+
+/** The sheet behind Confirm for a card repayment: the worked-out amount, open to change, and the day it was paid. */
+function openConfirmRepaymentSheet(anchor, item, name) {
+  const today = todayIso();
+  const { currency, precision } = item.from;
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const amount = el('input', {
+    id: 'repay-amount', type: 'text', inputMode: 'decimal', autocomplete: 'off', value: plainAmount(item.estimate, precision)
+  });
+  const date = el('input', {
+    id: 'repay-date', type: 'date', min: item.card.openingDate || null, max: today, value: item.date <= today ? item.date : today
+  });
+  const field = (control, label, hint) => el('div', { class: 'field' },
+    el('label', { for: control.id, text: label }), control, hint && el('p', { class: 'hint', text: hint }));
+  const basis = item.existing?.amountConfirmed ? 'The amount you set earlier.' : `Worked out from: ${basisWords(item.basis, item.period)}.`;
+
+  const form = el('form', {
+    class: 'pot-sheet', novalidate: true,
+    onsubmit: async event => {
+      event.preventDefault();
+      try {
+        if (!amount.value.trim()) throw Error('Enter the amount.');
+        const next = confirmRepayment(ledger.state, item.id, { minor: parseAmount(amount.value, currency), date: date.value, today });
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast(`${name} recorded.`);
+      } catch (error) {
+        errorBox.textContent = errorMessage(error);
+        errorBox.hidden = false;
+        if (!form.isConnected) showToast(errorMessage(error));
+      }
+    }
+  },
+    field(amount, `Amount (${currency})`, basis),
+    field(date, 'Paid on', item.date > today ? `Due ${formatDay(item.date)}. Confirming now records it as paid on the date above.` : null),
     errorBox,
     el('div', { class: 'entry-actions' },
       el('button', { type: 'submit', class: 'btn-primary btn-small', text: 'Confirm' })));
@@ -10727,6 +11048,7 @@ function quickAddForm(state, template, rerender) {
 
 
 
+
 // View state kept between re-renders: the rule being edited.
 const recurringView = { editingId: '' };
 
@@ -10741,7 +11063,8 @@ function buildRecurringSettings(rerender) {
   const today = todayIso();
   const byName = (a, b) => Number(Boolean(a.archived)) - Number(Boolean(b.archived)) || a.name.localeCompare(b.name);
   const rules = state.schedules.filter(r => !r.repayment).sort(byName);
-  const repayments = state.schedules.filter(r => r.repayment && !r.archived).sort(byName);
+  const repayments = state.schedules.filter(r => r.repayment).sort(byName);
+  const hasCard = state.accounts.some(a => a.type === 'credit_card' && !a.archived);
 
   /** Pause or resume, then record anything that is now due. */
   async function toggle(rule) {
@@ -10786,6 +11109,51 @@ function buildRecurringSettings(rerender) {
       editing && recurringForm(state, rule, rerender));
   };
 
+  /** Pause or resume a card repayment. */
+  async function toggleRepayment(rule) {
+    try {
+      const next = setCardRepaymentPaused(ledger.state, rule.id, !rule.archived);
+      if (recurringView.editingId === rule.id) recurringView.editingId = '';
+      await saveLedger(next);
+      rerender();
+      showToast(rule.archived ? 'Resumed.' : 'Paused. No repayment is asked for until you resume it.');
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  }
+
+  const repaymentRow = rule => {
+    const editing = recurringView.editingId === rule.id;
+    const from = state.accounts.find(a => a.id === rule.entry.account);
+    const next = nextDue(state, rule, today);
+    let estimate = null;
+    if (next && from) {
+      const minor = repaymentEstimate(state, rule, next, today).minor;
+      estimate = minor > 0n ? `about ${formatMoney(minor, from.currency, from.precision)}` : 'nothing to pay yet';
+    }
+    const meta = [
+      `from ${from?.name || 'an account that no longer exists'}, due ${frequencyWords(rule)}, ${basisWords(repaymentBasis(rule))}`,
+      rule.archived ? null : next ? `next ${formatDay(next)}, ${estimate || 'amount not known'}` : 'no more dates'
+    ].filter(Boolean).join(' · ');
+    return el('li', { class: 'ed-item' },
+      el('div', { class: 'ed-row' },
+        el('span', { class: 'ed-name' },
+          el('span', { class: 'ed-name-text' }, el('strong', { text: rule.name }), rule.archived && ' ', rule.archived && el('span', { class: 'tag-fixed', text: 'Paused' })),
+          el('span', { class: 'ed-meta', text: meta })),
+        el('div', { class: 'ed-actions' },
+          el('button', {
+            type: 'button', class: 'btn-text', text: 'Edit', 'aria-label': `Edit ${rule.name}`,
+            'aria-expanded': String(editing), 'data-focus': `rec-edit:${rule.id}`,
+            onclick: () => { recurringView.editingId = editing ? '' : rule.id; rerender(); }
+          }),
+          el('button', {
+            type: 'button', class: 'btn-text', text: rule.archived ? 'Resume' : 'Pause',
+            'aria-label': `${rule.archived ? 'Resume' : 'Pause'} ${rule.name}`, 'data-focus': `rec-pause:${rule.id}`,
+            onclick: () => toggleRepayment(rule)
+          }))),
+      editing && cardRepaymentForm(state, rule, rerender));
+  };
+
   return el('div', {},
     el('p', { class: 'note', text: 'Payments and income that repeat. When one falls due it is recorded the next time you open the app, or waits on Today for you to confirm.' }),
     rules.length
@@ -10794,16 +11162,62 @@ function buildRecurringSettings(rerender) {
     el('details', { class: 'fold' },
       el('summary', { text: 'Add a recurring payment' }),
       recurringForm(state, null, rerender)),
-    repayments.length > 0 && el('div', {},
-      el('p', { class: 'note', text: 'Card repayments' }),
-      el('ul', { class: 'plain-list ed-list' }, repayments.map(rule => el('li', { class: 'ed-item' },
-        el('div', { class: 'ed-row' },
-          el('span', { class: 'ed-name' },
-            el('span', { class: 'ed-name-text' }, el('strong', { text: rule.name })),
-            el('span', { class: 'ed-meta', text: `${frequencyWords(rule)} · Managed in the previous version` })),
-          el('div', { class: 'ed-actions' },
-            el('a', { class: 'btn-text', href: LEGACY_URL, text: 'Open', 'aria-label': `Open the previous version to change ${rule.name}` })))))))
+    el('p', { class: 'note', text: 'Card repayments. The amount is worked out each month and always waits on Today for you to confirm.' }),
+    repayments.length > 0 && el('ul', { class: 'plain-list ed-list' }, repayments.map(repaymentRow)),
+    hasCard
+      ? el('details', { class: 'fold' },
+        el('summary', { text: 'Add card repayment' }),
+        cardRepaymentForm(state, null, rerender))
+      : el('p', { class: 'hint', text: 'Add a credit card account in Settings → Accounts first.' })
   );
+}
+
+/** The form for a new card repayment (`rule` null) or an existing one. */
+function cardRepaymentForm(state, rule, rerender) {
+  const today = todayIso();
+  const key = rule ? rule.id.replace(/[^a-z0-9-]/gi, '-') : 'new';
+  const select = (name, options, value) => {
+    const control = el('select', { id: `rep-${name}-${key}` }, options.map(([v, text]) => el('option', { value: v, text })));
+    control.value = value;
+    return control;
+  };
+  const accountOptions = (keep, test) => state.accounts
+    .filter(a => a.id === keep || (!a.archived && test(a))).map(a => [a.id, `${a.name} (${a.currency})`]);
+  const cards = accountOptions(rule?.entry.toAccount, a => a.type === 'credit_card');
+  const sources = accountOptions(rule?.entry.account, a => a.type !== 'credit_card');
+  const card = select('card', cards, rule?.entry.toAccount || cards[0]?.[0] || '');
+  const from = select('from', [['', 'Choose an account'], ...sources], rule?.entry.account || '');
+  const start = el('input', { id: `rep-start-${key}`, type: 'date', value: rule?.start || today });
+  const basis = select('basis', [['last-month', 'Last month\'s spending'], ['balance', 'Full balance']], rule ? repaymentBasis(rule) : 'last-month');
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const field = (control, label, hint) => el('div', { class: 'field' },
+    el('label', { for: control.id, text: label }), control, hint && el('p', { class: 'hint', text: hint }));
+
+  async function submit(event) {
+    event.preventDefault();
+    try {
+      const next = saveCardRepayment(ledger.state, {
+        id: rule?.id, card: card.value, from: from.value, start: start.value, basis: basis.value
+      }, today);
+      recurringView.editingId = '';
+      await saveLedger(next);
+      rerender();
+      showToast(rule ? 'Card repayment saved.' : 'Card repayment added. It will wait on Today for you to confirm.');
+    } catch (error) {
+      errorBox.textContent = errorMessage(error);
+      errorBox.hidden = false;
+    }
+  }
+
+  return el('form', { class: rule ? 'ed-edit' : 'fold-body', onsubmit: submit, novalidate: true },
+    field(card, 'Card'),
+    field(from, 'Pay from', 'An account in the same currency as the card.'),
+    field(start, 'First due date', 'Due every month on this day.'),
+    field(basis, 'Amount to pay', 'Last month\'s spending is what was charged to the card in the calendar month before the due date.'),
+    errorBox,
+    el('div', { class: 'ed-edit-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: rule ? 'Save' : 'Add card repayment' }),
+      rule && el('button', { type: 'button', class: 'btn-text', text: 'Cancel', onclick: () => { recurringView.editingId = ''; rerender(); } })));
 }
 
 /** The form for a new rule (`rule` null) or an existing one. */
