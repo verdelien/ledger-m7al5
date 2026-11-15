@@ -5,6 +5,7 @@ import { commit, commitBatch, uid } from '../model.js';
 import { personalAmount, estimateAccountAmount } from '../money.js';
 import { el, slip, sectionTitle, todayIso, formatDay, formatMoney, plainAmount, errorMessage, showToast, LEGACY_URL } from './dom.js';
 import { ledger, saveLedger } from './ledger.js';
+import { wishPurchase, purchasedWish, wishPurchasePot } from '../wishlist-logic.js';
 import { createCategoryPicker } from './categories.js';
 import { createAccountPicker } from './accounts-picker.js';
 import { addActiveCurrency, buildCurrencySearch } from './currencies.js';
@@ -18,10 +19,22 @@ import { transferParts, hasSourceFee } from '../transfer-logic.js';
 import { activeTemplates, templatePrefill } from '../templates-logic.js';
 import { templateAmountLabel } from './quick-add-settings.js';
 import { buildDueToConfirm } from './recurring.js';
+import { buildReconcileReminders } from './reconcile.js';
+import { isTravelCategory, tripForDate } from '../travel-logic.js';
 import { saveRefund, deleteRefund, refundedSoFar, canRefundHere, suggestedSettled } from '../refund-logic.js';
+import { activeCaps, capCrossing } from '../caps-logic.js';
+import { withReportingValue } from '../rates-logic.js';
+import { capCrossingText } from './caps.js';
+import { saveFriend, allBalances, balancePhrase, sharedExpenseRecord, saveSharedRefund, sharedRefundLeft } from '../shared-logic.js';
 
 const RECENT_LIMIT = 40;
 const MORE_CURRENCIES = '__more';
+const NEW_FRIEND = '__new';
+
+/** An amount that may be zero (a share of a bill); otherwise as parseAmount. */
+function shareAmount(text, currency) {
+  return /^0(?:[.,]0*)?$/.test(text.trim()) ? 0 : parseAmount(text, currency);
+}
 
 // Remembered while the page is open, so adding several entries is quick.
 // `kept` holds a half-filled form across the redraw that follows adding a currency.
@@ -31,6 +44,7 @@ const todayDraft = { currency: '', account: null, editingId: '', kept: null, kin
 export function renderToday(root) {
   const state = ledger.state;
   const today = todayIso();
+  takeWishPurchase(state, today);
   const editing = state.entries.find(e => e.id === todayDraft.editingId) || null;
   if (!editing) todayDraft.editingId = '';
 
@@ -40,6 +54,33 @@ export function renderToday(root) {
         ? buildTransferPanel(state, today, editing)
         : buildEntryForm(state, today, editing),
       buildRecentList(state, today))));
+}
+
+/**
+ * "Record purchase" on the wishlist: start a new expense with the wish's name, price and
+ * currency. The category is left for the user. The form remembers the wish (kept.fromWish),
+ * and saving the expense closes it.
+ */
+function takeWishPurchase(state, today) {
+  const id = wishPurchase.id;
+  if (!id) return;
+  wishPurchase.id = '';
+  const wish = state.wishlist.find(w => w.id === id && (w.status === 'open' || w.status === 'saving'));
+  if (!wish) return;
+  // A currency no longer active: the form uses the usual one, so the price would mean something else.
+  const active = state.settings.activeCurrencies.includes(wish.currency);
+  const accounts = state.accounts.filter(a => !a.archived);
+  const account = accounts.some(a => a.id === todayDraft.account) || todayDraft.account === '' ? todayDraft.account
+    : accounts.some(a => a.id === state.settings.defaultAccount) ? state.settings.defaultAccount
+    : accounts.find(a => a.type === 'current' && a.currency === 'GBP')?.id ?? '';
+  todayDraft.editingId = '';
+  todayDraft.kind = 'expense';
+  if (active) todayDraft.currency = wish.currency;
+  todayDraft.kept = {
+    amount: active ? wish.amount : '', note: wish.name, date: today,
+    settled: '', settledState: 'auto', category: '', account, trip: '', tripChosen: false,
+    fromWish: wish.id
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +134,12 @@ function buildEntryForm(state, today, editing) {
   const kind = (editing ? editing.kind : todayDraft.kind) === 'income' ? 'income' : 'expense';
   const isIncome = kind === 'income';
   const paidLabel = isIncome ? 'Paid into' : 'Paid from';
+  // The wishlist item this expense buys ("Record purchase"), if it is still on the list.
+  const fromWish = !editing && !isIncome
+    ? state.wishlist.find(w => w.id === kept?.fromWish && (w.status === 'open' || w.status === 'saving')) || null
+    : null;
+  // Money saved for the wish is what pays for it: the expense comes out of the wish's pot.
+  const wishPot = fromWish ? wishPurchasePot(state, fromWish.id, today) : null;
 
   // A currency just added through "More currencies…" comes first, even while editing.
   const startCurrency = (kept && currencies.includes(todayDraft.currency) && todayDraft.currency)
@@ -112,9 +159,10 @@ function buildEntryForm(state, today, editing) {
   const amount = el('input', {
     id: 'entry-amount', class: 'amount-input', type: 'text', inputMode: 'decimal',
     autocomplete: 'off', placeholder: '0.00',
-    value: kept ? kept.amount : editing ? plainAmount(editing.minor, editing.precision) : '',
-    oninput: () => syncSettledField()
+    value: kept ? kept.amount : editing ? plainAmount(editing.friend ? editing.sharedTotal ?? editing.minor : editing.minor, editing.precision) : '',
+    oninput: () => syncSplit()
   });
+  const amountLabel = el('label', { for: 'entry-amount', text: 'Amount' });
   const dateInput = el('input', {
     id: 'entry-date', type: 'date', 'aria-label': 'Date', value: kept?.date || editing?.date || today
   });
@@ -147,7 +195,7 @@ function buildEntryForm(state, today, editing) {
       currentCurrency = code;
       showCurrency();
       closePopover();
-      syncSettledField();
+      syncSplit();
     };
     const option = (code, main, detail) => el('li', {
       role: 'option', tabIndex: -1, class: 'pop-option',
@@ -230,6 +278,8 @@ function buildEntryForm(state, today, editing) {
     onChange: () => { showAccount(); closePopover(); syncSettledField(); }
   });
   const selectedAccount = () => state.accounts.find(a => a.id === accountPicker.getValue());
+  /** The account this entry moves money on: none when a friend paid the bill. */
+  const payingAccount = () => (theyPaid() ? undefined : selectedAccount());
   const accountButton = el('button', {
     type: 'button', id: 'entry-account', class: 'paid-button',
     'aria-haspopup': 'dialog', 'aria-expanded': 'false',
@@ -288,8 +338,25 @@ function buildEntryForm(state, today, editing) {
     }
   }
 
+  // --- Spending target: shown when the paying account has one that covers the entry date.
+  const capToggle = el('input', {
+    id: 'entry-cap', type: 'checkbox',
+    checked: kept?.eligible ?? (editing ? editing.eligible === true : true)
+  });
+  const capLabelText = el('span');
+  const capField = el('div', { class: 'field cap-field', hidden: true }, el('label', { class: 'check-row' }, capToggle, capLabelText));
+  /** The targets this entry can count towards: an expense, on that account, on that date. */
+  const entryCaps = () => (isIncome ? [] : activeCaps(ledger.state, payingAccount()?.id, dateInput.value));
+  function syncCapField() {
+    const caps = entryCaps();
+    capField.hidden = !caps.length;
+    capLabelText.textContent = `Counts towards ${caps.map(c => c.name).join(' and ')}`;
+  }
+  dateInput.addEventListener('change', syncCapField);
+
   function syncSettledField() {
-    const account = selectedAccount();
+    syncCapField();
+    const account = payingAccount();
     const needed = !!account && account.currency !== currentCurrency;
     settledField.hidden = !needed;
     if (!needed) {
@@ -310,20 +377,104 @@ function buildEntryForm(state, today, editing) {
     }
     estimateTag.hidden = settledState === 'manual';
   }
-  syncSettledField();
+
+  // --- Split with a friend (expenses only). When on, Amount is the whole bill and
+  // "My share" is what counts as my spending; the rest is owed one way or the other.
+  const editingFriendPaid = Boolean(editing?.friend) && (editing.paidBy === 'friend' || editing.friendDelta < 0);
+  const splitStart = kept?.split || (editing?.friend
+    ? { on: true, friend: editing.friend, paidBy: editingFriendPaid ? 'friend' : 'me', share: plainAmount(editing.personalMinor, editing.precision), shareTouched: true, newName: '' }
+    : { on: false, friend: state.friends[0]?.id || NEW_FRIEND, paidBy: 'me', share: '', shareTouched: false, newName: '' });
+  let shareTouched = splitStart.shareTouched;
+  const splitToggle = el('input', { id: 'entry-split', type: 'checkbox', checked: splitStart.on, onchange: () => syncSplit() });
+  const friendSelect = el('select', { id: 'entry-friend', onchange: () => syncSplit() },
+    state.friends.map(f => el('option', { value: f.id, text: f.name })),
+    el('option', { value: NEW_FRIEND, text: 'New friend…' }));
+  friendSelect.value = state.friends.some(f => f.id === splitStart.friend) ? splitStart.friend : NEW_FRIEND;
+  const newFriendName = el('input', { id: 'entry-friend-name', type: 'text', maxLength: 150, autocomplete: 'off', value: splitStart.newName });
+  const newFriendField = el('div', { class: 'field' }, el('label', { for: 'entry-friend-name', text: 'Friend’s name' }), newFriendName);
+  const paidBySelect = el('select', { id: 'entry-paid-by', onchange: () => syncSplit() },
+    el('option', { value: 'me', text: 'I paid' }), el('option', { value: 'friend', text: 'They paid' }));
+  paidBySelect.value = splitStart.paidBy;
+  const shareInput = el('input', {
+    id: 'entry-share', type: 'text', inputMode: 'decimal', autocomplete: 'off', value: splitStart.share,
+    oninput: () => { shareTouched = true; syncSplit(); }
+  });
+  const splitHint = el('p', { class: 'hint', role: 'status' });
+  const splitBody = el('div', { class: 'fold-body split-body' },
+    el('div', { class: 'field' }, el('label', { for: 'entry-friend', text: 'Friend' }), friendSelect),
+    newFriendField,
+    el('div', { class: 'field' }, el('label', { for: 'entry-paid-by', text: 'Who paid?' }), paidBySelect),
+    el('div', { class: 'field' }, el('label', { for: 'entry-share', text: 'My share' }), shareInput, splitHint));
+  const splitField = !isIncome && el('div', { class: 'field split-field' },
+    el('label', { class: 'check-row' }, splitToggle, el('span', { text: 'Split with a friend' })),
+    splitBody);
+  const accountField = el('div', { class: 'field' }, el('label', { for: 'entry-account', text: paidLabel }), accountButton);
+  const splitOn = () => !isIncome && splitToggle.checked;
+  function theyPaid() { return splitOn() && paidBySelect.value === 'friend'; }
+
+  function syncSplit() {
+    const on = splitOn();
+    splitBody.hidden = !on;
+    newFriendField.hidden = friendSelect.value !== NEW_FRIEND;
+    amountLabel.textContent = on ? 'Total amount' : 'Amount';
+    accountField.hidden = theyPaid();
+    if (on) {
+      let total = null, own = null;
+      try { total = parseAmount(amount.value, currentCurrency); } catch { /* amount not complete yet */ }
+      // Until the share is typed, it is half of the bill.
+      if (!shareTouched) shareInput.value = total == null ? '' : plainAmount(Math.floor(total / 2), digits(currentCurrency));
+      try { own = shareAmount(shareInput.value, currentCurrency); } catch { /* share not complete yet */ }
+      const money = minor => formatMoney(minor, currentCurrency, digits(currentCurrency));
+      splitHint.textContent = total == null || own == null ? ''
+        : own > total ? 'Your share is more than the total.'
+        : theyPaid() ? `You owe them ${money(own)}`
+        : `They owe you ${money(total - own)}`;
+    }
+    syncSettledField();
+  }
+  syncSplit();
 
   const picker = createCategoryPicker({
     getState: () => ledger.state,
     kind,
-    value: kept?.category || editing?.category || (isIncome ? '' : state.settings.defaultCategory || '')
+    value: kept?.category || editing?.category || (isIncome ? '' : state.settings.defaultCategory || ''),
+    onChange: () => syncTripField()
   });
+
+  // --- Trip: only for a Travel category. Until the user chooses, it follows the date.
+  let tripChosen = kept ? Boolean(kept.tripChosen) : Boolean(editing);
+  const tripSelect = el('select', { id: 'entry-trip', onchange: () => { tripChosen = true; } });
+  const tripField = el('div', { class: 'field' },
+    el('label', { for: 'entry-trip', text: 'Trip' }), tripSelect,
+    el('a', { class: 'btn-text', href: '#trips', text: 'Add or edit trips' }));
+  function syncTripField() {
+    const current = ledger.state;
+    const travel = !isIncome && isTravelCategory(current, picker.getValue());
+    const wanted = tripChosen ? tripSelect.value : travel ? tripForDate(current, dateInput.value)?.id || '' : '';
+    const trips = current.trips.filter(t => !t.archived || t.id === editing?.trip || t.id === wanted);
+    tripSelect.replaceChildren(el('option', { value: '', text: 'No trip' }), ...trips.map(t => el('option', { value: t.id, text: t.name })));
+    tripSelect.value = trips.some(t => t.id === wanted) ? wanted : '';
+    // An entry that already has a trip keeps showing it, whatever its category.
+    tripField.hidden = isIncome || !(travel || tripSelect.value);
+  }
+  tripSelect.append(el('option', { value: '', text: 'No trip' }),
+    ...state.trips.map(t => el('option', { value: t.id, text: t.name })));
+  tripSelect.value = kept ? kept.trip || '' : editing?.trip || '';
+  dateInput.addEventListener('change', syncTripField);
+  syncTripField();
 
   /** What is typed so far, to carry across a redraw of the form. */
   function keepForm() {
     return {
       amount: amount.value, note: note.value, date: dateInput.value,
-      settled: settled.value, settledState,
-      category: picker.getValue(), account: accountPicker.getValue()
+      settled: settled.value, settledState, eligible: capToggle.checked,
+      category: picker.getValue(), account: accountPicker.getValue(),
+      trip: tripSelect.value, tripChosen,
+      fromWish: fromWish?.id || '',
+      split: {
+        on: splitToggle.checked, friend: friendSelect.value, paidBy: paidBySelect.value,
+        share: shareInput.value, shareTouched, newName: newFriendName.value
+      }
     };
   }
 
@@ -368,6 +519,33 @@ function buildEntryForm(state, today, editing) {
   const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
   const saveButton = el('button', { type: 'submit', class: 'btn-primary', text: editing ? 'Save changes' : isIncome ? 'Save income' : 'Save expense' });
 
+  /**
+   * Read a bill split with a friend. Returns the record and the state to save it into
+   * (which already holds a friend added in the form).
+   */
+  function readSharedForm(total, category) {
+    let base = ledger.state;
+    let friendId = friendSelect.value;
+    if (friendId === NEW_FRIEND) {
+      friendId = uid();
+      base = saveFriend(base, { id: friendId, name: newFriendName.value });
+    }
+    if (!shareInput.value.trim()) throw Error('Enter your share of the bill.');
+    const account = payingAccount();
+    const foreign = account && account.currency !== currentCurrency;
+    if (foreign && !settled.value.trim()) {
+      throw Error(`Enter what ${account.name} was charged in ${account.currency} (an estimate is fine), or choose "No account".`);
+    }
+    const record = sharedExpenseRecord(base, {
+      id: editing?.id || '', friend: friendId, paidBy: paidBySelect.value,
+      totalMinor: total, ownMinor: shareAmount(shareInput.value, currentCurrency),
+      currency: currentCurrency, category: category.id, account: accountPicker.getValue(),
+      date: dateInput.value, note: note.value, trip: tripField.hidden ? '' : tripSelect.value, today,
+      ...(foreign ? { settledMinor: parseAmount(settled.value, account.currency), settledEstimate: settledState !== 'manual' } : {})
+    });
+    return { record, base };
+  }
+
   /** Read the form into an entry record. Throws a readable error if something is missing. */
   function readForm() {
     const currencyCode = currentCurrency;
@@ -376,6 +554,7 @@ function buildEntryForm(state, today, editing) {
     if (!dateInput.value) throw Error('Choose a date.');
     const category = ledger.state.categories.find(c => c.id === picker.getValue());
     if (!category) throw Error('Choose a category.');
+    if (splitOn()) return readSharedForm(minor, category);
 
     const record = {
       tags: '', trip: '',
@@ -389,9 +568,12 @@ function buildEntryForm(state, today, editing) {
       currency: currencyCode,
       precision: digits(currencyCode),
       category: category.id,
-      pot: isIncome ? '' : category.pot || '', // income is shared out between pots by the payday flow
+      // Income is shared out between pots by the payday flow. An expense being edited keeps the pot
+      // it was charged to (a wish's savings pot, say) unless its category changes.
+      pot: isIncome ? '' : editing && editing.kind === kind && editing.category === category.id ? editing.pot || '' : category.pot || '',
       account: accountPicker.getValue(),
-      note: note.value.trim()
+      note: note.value.trim(),
+      trip: tripField.hidden ? '' : tripSelect.value
     };
 
     // The amount in the account's own currency, when it differs. The ledger
@@ -409,11 +591,22 @@ function buildEntryForm(state, today, editing) {
       if (settledState !== 'manual') record.settledEstimate = true; // to be confirmed later
     }
 
-    // A changed amount makes an older reporting-currency value stale.
-    if (editing && (editing.minor !== minor || editing.currency !== currencyCode)) {
+    // A changed amount makes an older reporting-currency value stale. So does a changed
+    // charge, when that charge was the value.
+    const chargeWasValue = editing?.reportingMinor != null && editing.settledCurrency === editing.reportingCurrency
+      && editing.settledMinor === editing.reportingMinor && record.settledMinor !== editing.settledMinor;
+    if (editing && (editing.minor !== minor || editing.currency !== currencyCode || chargeWasValue)) {
       delete record.reportingMinor; delete record.reportingCurrency; delete record.reportingPrecision;
     }
-    return record;
+    // The split was switched off: it is an ordinary expense again.
+    if (editing?.friend) {
+      if (ledger.state.entries.some(r => r.kind === 'refund' && r.original === editing.id)) {
+        throw Error('This shared bill has refunds. Delete them before removing the split.');
+      }
+      for (const key of ['friend', 'friendDelta', 'personalMinor', 'sharedTotal', 'paidBy']) delete record[key];
+      if (record.tags === 'shared') record.tags = '';
+    }
+    return { record, base: ledger.state };
   }
 
   let saving = false;
@@ -422,8 +615,16 @@ function buildEntryForm(state, today, editing) {
     if (saving) return;
     const previousEditing = todayDraft.editingId;
     try {
-      const record = readForm();
-      let next = commit(ledger.state, 'entries', record);
+      const read = readForm();
+      const base = read.base;
+      // Counts towards a spending target only while one covers this account and date.
+      const caps = entryCaps();
+      const marked = { ...read.record };
+      if (caps.length) marked.eligible = capToggle.checked; else delete marked.eligible;
+      // The reporting-currency value, when what the account was charged or a rate saved for the date gives one.
+      const record = withReportingValue(base, marked);
+      if (wishPot && record.kind === 'expense' && !record.splits && record.currency === wishPot.currency) record.pot = wishPot.id;
+      let next = commit(base, 'entries', record);
 
       // Would this expense take its pot below zero? Ask first; nothing moves unless the user chooses it.
       // Income never takes a pot down, so it is not checked.
@@ -436,13 +637,21 @@ function buildEntryForm(state, today, editing) {
         next = answer.state;
         moved = answer.moved;
       }
+      // Bought from the wishlist: the wish is closed (or its next restock set) in the same save.
+      // A planned expense has not happened yet, so the wish stays as it is.
+      let bought = null;
+      if (fromWish && record.kind === 'expense' && record.status === 'posted') {
+        bought = purchasedWish(next, fromWish.id, record.date);
+        if (bought) next = commit(next, 'wishlist', bought);
+      }
       saving = true;
       saveButton.disabled = true;
       todayDraft.currency = record.currency;
-      todayDraft.account = record.account;
+      if (record.paidBy !== 'friend') todayDraft.account = record.account;
       todayDraft.editingId = '';
       todayDraft.kind = 'expense'; // the form goes back to the common case
       const sharesOut = opensPaydayFlow(next, record);
+      const capNews = caps.map(cap => capCrossingText(ledger.state, next, cap)).filter(Boolean).join(' ');
       await saveLedger(next); // re-renders the screen with an empty form
       if (sharesOut) {
         // A salary: open the payday preview for it straight away. Closing it changes nothing;
@@ -452,11 +661,17 @@ function buildEntryForm(state, today, editing) {
         if (anchor) openPaydayPreview(anchor, record);
         return;
       }
-      showToast(record.status === 'planned'
-        ? `Saved as planned for ${formatDay(record.date)}.`
+      showToast((bought && !moved && !warning && !record.friend
+        ? (bought.status === 'purchased'
+          ? `Saved. ${bought.name} is off the wishlist.`
+          : `Saved. Next restock of ${bought.name}: ${formatDay(bought.nextRestock)}.`)
+        : record.status === 'planned'
+        ? `Saved as planned for ${formatDay(record.date)}.${fromWish ? ` ${fromWish.name} stays on the wishlist until it is bought.` : ''}`
         : moved ? `Saved. Moved ${formatMoney(moved.minor, moved.pot.currency, moved.pot.precision)} from ${moved.from} to ${moved.pot.name}.`
         : warning ? `Saved. ${warning.pot.name} is below zero until you cover it.`
-        : 'Saved on this device.');
+        : record.friend ? `Saved. ${sharedSavedText(next, record)}`
+        : capNews ? 'Saved.'
+        : 'Saved on this device.') + (capNews ? ` ${capNews}` : ''));
     } catch (error) {
       // Keep everything the user typed.
       todayDraft.editingId = previousEditing;
@@ -472,14 +687,27 @@ function buildEntryForm(state, today, editing) {
     kindSwitch,
     sectionTitle(editing ? (isIncome ? 'Edit income' : 'Edit expense') : isIncome ? 'Add income' : 'Add an expense'),
     quickAdd,
+    fromWish && el('p', { class: 'note wl-buying' },
+      el('span', { text: `Buying “${fromWish.name}” from your wishlist. Choose a category; saving closes the wish.${wishPot ? ` Paid from the ${wishPot.name} pot.` : ''}` }),
+      el('button', {
+        type: 'button', class: 'btn-text', text: 'Not this',
+        onclick: () => {
+          todayDraft.kept = { ...keepForm(), fromWish: '' };
+          todayDraft.currency = currentCurrency;
+          rerenderToday();
+        }
+      })),
     el('div', { class: 'field' },
-      el('label', { for: 'entry-amount', text: 'Amount' }),
+      amountLabel,
       el('div', { class: 'amount-row' }, amount)),
     el('div', { class: 'entry-meta-row' }, currencyButton, dateInput),
     el('div', { class: 'field' }, el('span', { class: 'field-label', text: 'Category' }), picker.element),
-    el('div', { class: 'field' }, el('label', { for: 'entry-account', text: paidLabel }), accountButton),
+    splitField,
+    tripField,
+    accountField,
     !accounts.length && el('p', { class: 'hint', text: 'No accounts yet. You can add one in Settings, or save without one.' }),
     settledField,
+    capField,
     el('div', { class: 'field' }, el('label', { for: 'entry-note', text: 'Note (optional)' }), note),
     errorBox,
     el('div', { class: 'form-actions' },
@@ -488,6 +716,14 @@ function buildEntryForm(state, today, editing) {
         type: 'button', class: 'btn-secondary', text: 'Cancel',
         onclick: () => { todayDraft.editingId = ''; rerenderToday(); }
       })));
+}
+
+/** "Ana owes you £48.00." after saving a shared bill: the balance in that bill's currency. */
+function sharedSavedText(state, record) {
+  const row = allBalances(state).find(item => item.friend.id === record.friend);
+  if (!row) return 'Saved on this device.';
+  const balance = row.balances.find(b => b.currency === record.currency) || { minor: 0n };
+  return balancePhrase(row.friend.name, balance) + '.';
 }
 
 /** Redraw this screen without saving anything. */
@@ -522,9 +758,20 @@ function netAmount(state, entry) {
   return entry.direction === 'increase' ? BigInt(entry.minor) : -BigInt(entry.minor);
 }
 
+/** One compact line per friend with money outstanding, each a link to that friend. Nothing when all is settled. */
+function buildOwedLines(state) {
+  const owing = allBalances(state).filter(row => row.balances.length);
+  if (!owing.length) return null;
+  return el('ul', { class: 'plain-list owed-lines', 'aria-label': 'Shared bills' },
+    owing.map(({ friend, balances }) => el('li', {},
+      el('a', { class: 'owed-line', href: `#people/${encodeURIComponent(friend.id)}`, 'data-focus': `owed:${friend.id}` },
+        el('span', { text: balances.map(b => balancePhrase(friend.name, b)).join(' · ') }),
+        el('span', { class: 'tv-arrow', 'aria-hidden': 'true', text: '→' })))));
+}
+
 function buildRecentList(state, today) {
   // Recurring payments waiting for a yes or no come first.
-  const wrap = el('div', { class: 'recent' }, buildDueToConfirm(state, today), sectionTitle('Today and recent'));
+  const wrap = el('div', { class: 'recent' }, buildReconcileReminders(state, today), buildDueToConfirm(state, today), buildOwedLines(state), sectionTitle('Today and recent'));
 
   // Newest first. Refunds are folded into their purchase, not listed alone.
   const rows = state.entries
@@ -563,6 +810,7 @@ function buildRecentList(state, today) {
       dayRows.map(entry => entryRow(state, entry))));
   }
 
+  wrap.append(el('p', { class: 'hint' }, el('a', { href: '#people', text: 'People and shared bills' })));
   if (rows.length === RECENT_LIMIT) {
     wrap.append(el('p', { class: 'hint' }, 'Showing the latest 40. Older entries are in the ',
       el('a', { href: LEGACY_URL, text: 'previous version' }), '.'));
@@ -609,10 +857,13 @@ function entryDetail(state, entry, net) {
 
   if (entry.kind === 'expense') {
     const refunds = refundsOf(state, entry);
-    lines.push(line(`${formatDay(entry.date)} · Paid`, money(-BigInt(entry.minor))));
+    const friend = entry.friend && (state.friends.find(f => f.id === entry.friend)?.name || 'Friend');
+    const friendPaid = Boolean(entry.friend) && (entry.paidBy === 'friend' || entry.friendDelta < 0);
+    lines.push(friendPaid
+      ? line(`${formatDay(entry.date)} · ${friend} paid`, money(-BigInt(entry.sharedTotal ?? entry.minor)))
+      : line(`${formatDay(entry.date)} · Paid`, money(-BigInt(entry.minor))));
     if (entry.friend) {
-      const friend = state.friends.find(f => f.id === entry.friend)?.name || 'Friend';
-      lines.push(line(`Your share (${friend} covers the rest)`, money(-personalAmount(entry))));
+      lines.push(line(friendPaid ? `Your share (you owe ${friend})` : `Your share (${friend} covers the rest)`, money(-personalAmount(entry))));
     }
     const refundable = canRefundHere(state, entry);
     for (const refund of refunds) {
@@ -653,7 +904,7 @@ function entryDetail(state, entry, net) {
 
   // Plain expenses, incomes not yet shared out between pots, and transfers can be edited here.
   // Other kinds keep their own forms in the previous version.
-  const simple = (entry.kind === 'expense' && !entry.splits && !entry.friend)
+  const simple = (entry.kind === 'expense' && !entry.splits && !entry.id.startsWith('forgiven:'))
     || (entry.kind === 'income' && !entry.friend && !state.allocations.some(a => a.salary === entry.id))
     || (entry.kind === 'transfer' && !hasSourceFee(state, entry));
   const firstField = entry.kind === 'transfer' ? 'transfer-amount' : 'entry-amount';
@@ -663,8 +914,11 @@ function entryDetail(state, entry, net) {
           type: 'button', class: 'btn-text', text: 'Edit',
           onclick: () => { todayDraft.editingId = entry.id; rerenderToday(); document.getElementById(firstField)?.focus(); }
         })
-      : el('a', { class: 'btn-text', href: LEGACY_URL, text: 'Edit in previous version' }),
-    entry.kind === 'expense' && canRefundHere(state, entry) && refundedSoFar(state, entry) < BigInt(entry.minor)
+      : entry.friend || entry.kind === 'settlement' || entry.id.startsWith('forgiven:')
+        ? el('a', { class: 'btn-text', href: '#people', text: 'See under People' })
+        : el('a', { class: 'btn-text', href: LEGACY_URL, text: 'Edit in previous version' }),
+    entry.kind === 'expense' && canRefundHere(state, entry)
+      && (entry.friend ? sharedRefundLeft(state, entry).own > 0n || sharedRefundLeft(state, entry).theirs > 0n : refundedSoFar(state, entry) < BigInt(entry.minor))
       && el('button', { type: 'button', class: 'btn-text', text: 'Add refund', onclick: event => openRefundSheet(event.currentTarget, entry) }),
     deleteButton(entry));
 
@@ -676,6 +930,7 @@ function entryDetail(state, entry, net) {
  * The rules (how much is left, which dates are allowed) live in refund-logic.js.
  */
 function openRefundSheet(anchor, purchase, refund = null) {
+  if (purchase.friend) return openSharedRefundSheet(anchor, purchase, refund);
   const state = ledger.state;
   const today = todayIso();
   const left = BigInt(purchase.minor) - refundedSoFar(state, purchase, refund?.id || '');
@@ -772,6 +1027,116 @@ function openRefundSheet(anchor, purchase, refund = null) {
   openPopover({ anchor, label: refund ? 'Edit refund' : 'Refund', role: 'dialog', content: form });
 }
 
+/**
+ * The refund sheet for a bill shared with a friend: what the shop gave back in all, and
+ * my share of it. An existing shared refund is changed by deleting it and adding it again.
+ */
+function openSharedRefundSheet(anchor, purchase, refund = null) {
+  const state = ledger.state;
+  const today = todayIso();
+  const friend = state.friends.find(f => f.id === purchase.friend)?.name || 'your friend';
+  const left = sharedRefundLeft(state, purchase);
+  const money = minor => formatMoney(minor, purchase.currency, purchase.precision);
+  const field = (id, label, control, hint) => el('div', { class: 'field' },
+    el('label', { for: id, text: label }), control, hint && el('p', { class: 'hint', text: hint }));
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const showError = error => {
+    errorBox.textContent = errorMessage(error);
+    errorBox.hidden = false;
+    if (!form.isConnected) showToast(errorMessage(error));
+  };
+  let form;
+
+  if (refund) {
+    let armed = false;
+    const remove = el('button', { type: 'button', class: 'btn-text', text: 'Delete refund' });
+    remove.addEventListener('blur', () => { armed = false; remove.textContent = 'Delete refund'; remove.classList.remove('is-armed'); });
+    remove.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true;
+        remove.textContent = 'Press again to delete';
+        remove.classList.add('is-armed');
+        return;
+      }
+      try {
+        const next = deleteRefund(ledger.state, refund.id);
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast('Refund deleted.');
+      } catch (error) {
+        showError(error);
+      }
+    });
+    form = el('div', { class: 'pot-sheet' },
+      el('p', { class: 'note', text: `${formatDay(refund.date)}: the shop refunded ${money(refund.merchantRefund ?? refund.minor)}, of which ${money(refund.personalMinor ?? refund.minor)} was your share.` }),
+      el('p', { class: 'hint', text: 'To change it, delete this refund and add it again.' }),
+      errorBox,
+      el('div', { class: 'entry-actions' }, remove));
+    openPopover({ anchor, label: 'Shared refund', role: 'dialog', content: form });
+    return;
+  }
+
+  const foreign = !left.friendPaid && purchase.settledMinor != null && Boolean(purchase.settledCurrency);
+  const account = state.accounts.find(a => a.id === purchase.account);
+  const billTotal = BigInt(purchase.sharedTotal ?? purchase.minor);
+  const total = el('input', { id: 'refund-total', type: 'text', inputMode: 'decimal', autocomplete: 'off', placeholder: `Up to ${money(left.total)}` });
+  const own = el('input', { id: 'refund-own', type: 'text', inputMode: 'decimal', autocomplete: 'off' });
+  const credited = foreign && el('input', { id: 'refund-credited', type: 'text', inputMode: 'decimal', autocomplete: 'off' });
+  const date = el('input', { id: 'refund-date', type: 'date', min: purchase.date, max: today, value: today });
+  const note = el('input', { id: 'refund-note', type: 'text', maxLength: 500, autocomplete: 'off' });
+  // Until typed, my share of the refund is the same part as my share of the bill.
+  let ownTouched = false, creditTouched = false;
+  own.addEventListener('input', () => { ownTouched = true; });
+  if (credited) credited.addEventListener('input', () => { creditTouched = true; });
+  total.addEventListener('input', () => {
+    let refunded = null;
+    try { refunded = parseAmount(total.value, purchase.currency); } catch { /* amount not complete yet */ }
+    if (!ownTouched) {
+      let part = refunded == null || billTotal <= 0n ? null : (BigInt(refunded) * BigInt(purchase.personalMinor) * 2n + billTotal) / (billTotal * 2n);
+      if (part != null && part > left.own) part = left.own;
+      own.value = part == null ? '' : plainAmount(part, purchase.precision);
+    }
+    if (credited && !creditTouched) {
+      const suggestion = refunded == null ? null : suggestedSettled(purchase, refunded);
+      credited.value = suggestion == null ? '' : plainAmount(suggestion, purchase.settledPrecision);
+    }
+  });
+
+  form = el('form', {
+    class: 'pot-sheet', novalidate: true,
+    onsubmit: async event => {
+      event.preventDefault();
+      try {
+        if (!total.value.trim()) throw Error('Enter the total refunded by the shop.');
+        if (!own.value.trim()) throw Error('Enter your share of the refund.');
+        const fields = {
+          purchaseId: purchase.id, totalMinor: parseAmount(total.value, purchase.currency),
+          ownMinor: shareAmount(own.value, purchase.currency), date: date.value, note: note.value, today
+        };
+        if (credited && creditTouched && credited.value.trim()) fields.settledMinor = parseAmount(credited.value, purchase.settledCurrency);
+        const next = saveSharedRefund(ledger.state, fields);
+        closePopover({ restoreFocus: false });
+        await saveLedger(next);
+        showToast(`Refund saved. ${sharedSavedText(next, purchase)}`);
+      } catch (error) {
+        showError(error);
+      }
+    }
+  },
+    field('refund-total', `Total refunded by the shop (${purchase.currency})`, total),
+    field('refund-own', 'Your share of it', own, left.friendPaid
+      ? `${friend} paid, so only your share is recorded: you owe them that much less.`
+      : `The rest is ${friend}’s share: they owe you that much less.`),
+    field('refund-date', 'Date', date),
+    foreign && field('refund-credited', `Credited to ${account?.name || 'account'} (${purchase.settledCurrency})`, credited, 'Estimate from the original charge'),
+    field('refund-note', 'Note (optional)', note),
+    errorBox,
+    el('div', { class: 'entry-actions' },
+      el('button', { type: 'submit', class: 'btn-primary btn-small', text: 'Save refund' })));
+
+  openPopover({ anchor, label: 'Shared refund', role: 'dialog', content: form });
+}
+
 /** Two presses: the first asks, the second deletes. Deleted records can be restored. */
 function deleteButton(entry) {
   let armed = false;
@@ -786,7 +1151,7 @@ function deleteButton(entry) {
     }
     try {
       const state = ledger.state;
-      if (entry.kind === 'settlement') throw Error('This payment is linked to a shared debt. Record a correcting settlement in the previous version instead.');
+      if (entry.kind === 'settlement' || entry.id.startsWith('forgiven:')) throw Error('This record belongs to a shared bill. Remove it from the friend’s history under People.');
       if (state.allocations.some(a => a.salary === entry.id)) throw Error('This income has pot allocations. Reverse them in the previous version first.');
       // Linked records go together: a transfer with its fee, a purchase with its refunds.
       const linked = state.entries.filter(r => r.id === entry.id

@@ -19,6 +19,7 @@ import { el, slip, sectionTitle, todayIso, formatDay, formatMoney, plainAmount, 
 import { ledger, saveLedger } from './ledger.js';
 import { openPopover, closePopover } from './popover.js';
 import { categoryIconNode } from './pixel-icons.js';
+import { wishlistSection } from './wishlist.js';
 
 /** Format an amount in a pot's own currency. */
 function potMoney(minor, pot) {
@@ -78,7 +79,9 @@ export function renderPots(root) {
       ? el('ul', { class: 'plain-list pots-list' }, pots.map(pot => potRow(state, pot, today)))
       : el('p', { class: 'empty', text: 'There are no pots yet. You can add one in Settings.' }),
     el('p', { class: 'hint', text: 'Tap a pot to see its month. A pot below zero stays red until you cover it; nothing moves on its own.' }),
-    el('a', { class: 'btn-text', href: '#settings/pots', text: 'Add, rename or archive pots' })));
+    el('a', { class: 'btn-text', href: '#settings/pots', text: 'Add, rename or archive pots' }),
+    wishlistSection(state, today),
+    el('a', { class: 'btn-text nw-link', href: '#networth', text: 'Net worth & investments →' })));
 }
 
 function potRow(state, pot, today) {
@@ -150,7 +153,8 @@ function potSheet(state, pot, today) {
         ? `On. Money left unused for ${rollover.months} months moves to ${target?.name || 'savings'} when the app opens.`
         : 'Off. Unused money stays in this pot.'
     }),
-    el('a', { class: 'btn-text', href: '#settings/pots', text: 'Change in Settings' }));
+    el('a', { class: 'btn-text', href: '#settings/pots', text: 'Change in Settings' }),
+    pot.id === 'Travel' && el('a', { class: 'btn-text', href: '#trips', text: 'Travel budget & trips', onclick: () => closePopover({ restoreFocus: false }) }));
 }
 
 // ---------------------------------------------------------------------------

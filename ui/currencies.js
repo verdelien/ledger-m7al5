@@ -1,10 +1,12 @@
 // Settings → Currencies: the active list and its order, the reporting
-// currency, and a rough default rate for each currency. Also the currency
+// currency, a rough default rate for each currency, and the rates saved for
+// a date (the ones that count as evidence). Also the currency
 // search that Today's "More currencies…" option shares.
 
 import { digits, currencyName, searchCurrencies } from '../domain.js';
 import { rateParts } from '../money.js';
-import { el, errorMessage, showToast, todayIso } from './dom.js';
+import { el, sectionTitle, errorMessage, showToast, todayIso, formatMoney } from './dom.js';
+import { saveRate, deleteRate, unvaluedEntries, valueEntries } from '../rates-logic.js';
 import { ledger, saveLedger } from './ledger.js';
 import { dragHandle, moveItem } from './drag-sort.js';
 
@@ -166,7 +168,106 @@ export function buildCurrencies(rerender) {
         class: 'hint',
         text: 'Totals and reports use this currency. To report in another one, add it to the list first.'
           + (hasRates ? ' Changing it clears the default rates, because they are quoted in it.' : '')
-      })));
+      })),
+    buildDatedRates(state));
+}
+
+const datedRateDay = iso => {
+  const [year, month, day] = iso.split('-').map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+/** Rates saved for a day, newest first; a form to add one; and the past entries they could value. */
+function buildDatedRates(state) {
+  const { activeCurrencies: active, reportingCurrency: reporting } = state.settings;
+  const saved = [...(state.settings.referenceRates || [])]
+    .sort((a, b) => b.date.localeCompare(a.date) || a.base.localeCompare(b.base) || a.quote.localeCompare(b.quote));
+
+  const rows = saved.map(rate => {
+    const words = `1 ${rate.base} = ${rate.rate} ${rate.quote}`;
+    let armed = false;
+    const remove = el('button', {
+      type: 'button', class: 'btn-text', text: 'Delete', 'aria-label': `Delete the rate ${words} of ${datedRateDay(rate.date)}`,
+      'data-focus': `rate-delete:${rate.base}:${rate.quote}:${rate.date}`
+    });
+    remove.addEventListener('blur', () => { armed = false; remove.textContent = 'Delete'; remove.classList.remove('is-armed'); });
+    remove.addEventListener('click', () => {
+      if (!armed) {
+        armed = true;
+        remove.textContent = 'Press again to delete';
+        remove.classList.add('is-armed');
+        return;
+      }
+      quietly(async () => {
+        await saveLedger(deleteRate(ledger.state, rate));
+        showToast('Rate deleted. Entries already valued keep their value.');
+      });
+    });
+    return el('li', {}, el('div', { class: 'list-row' },
+      el('span', { class: 'entry-text' }, el('span', { class: 'entry-title', text: `${words} · ${datedRateDay(rate.date)}` })),
+      remove));
+  });
+
+  // Add a rate: 1 From = Rate To, on a day.
+  const options = () => active.map(code => el('option', { value: code, text: code }));
+  const from = el('select', { id: 'rate-from' }, options());
+  const to = el('select', { id: 'rate-to' }, options());
+  to.value = reporting;
+  from.value = active.find(code => code !== reporting) || reporting;
+  const rateInput = el('input', { id: 'rate-value', type: 'text', inputMode: 'decimal', autocomplete: 'off', placeholder: 'e.g. 0.0052' });
+  const rateLabel = el('label', { for: 'rate-value' });
+  const showRateLabel = () => { rateLabel.textContent = `Rate: 1 ${from.value} = how many ${to.value}?`; };
+  from.addEventListener('change', showRateLabel);
+  to.addEventListener('change', showRateLabel);
+  showRateLabel();
+  const day = el('input', { id: 'rate-date', type: 'date', value: todayIso() });
+  const errorBox = el('p', { class: 'form-error', role: 'alert', hidden: true });
+  const field = (id, label, control) => el('div', { class: 'field' }, typeof label === 'string' ? el('label', { for: id, text: label }) : label, control);
+  const form = el('details', { class: 'fold' },
+    el('summary', { text: 'Add a dated rate' }),
+    el('form', {
+      class: 'fold-body', novalidate: true,
+      onsubmit: async event => {
+        event.preventDefault();
+        try {
+          const next = saveRate(ledger.state, { base: from.value, quote: to.value, rateText: rateInput.value, date: day.value });
+          await saveLedger(next);
+          showToast('Rate saved. New entries on or after that day use it.');
+        } catch (error) {
+          errorBox.textContent = errorMessage(error);
+          errorBox.hidden = false;
+        }
+      }
+    },
+      el('div', { class: 'field-pair' }, field('rate-from', 'From', from), field('rate-to', 'To', to)),
+      el('div', { class: 'field-pair' }, field('rate-value', rateLabel, rateInput), field('rate-date', 'Date', day)),
+      el('p', { class: 'hint', text: 'A rate applies from its date until a later one is saved. Entries dated before your earliest rate are left without a value.' }),
+      errorBox,
+      el('button', { type: 'submit', class: 'btn-primary', text: 'Save rate' })));
+
+  // Past entries a saved rate could value. Nothing is valued until the button is pressed.
+  const waiting = unvaluedEntries(state);
+  const money = row => formatMoney(row.minor, reporting, row.precision);
+  const valueThem = waiting.length > 0 && el('div', { class: 'note rate-unvalued' },
+    el('p', { text: `${waiting.length} past ${waiting.length === 1 ? 'entry has' : 'entries have'} no ${reporting} value but a saved rate could value ${waiting.length === 1 ? 'it' : 'them'}.` }),
+    el('ul', { class: 'rate-sample' }, waiting.slice(0, 3).map(row => el('li', {
+      text: `${datedRateDay(row.entry.date)} · ${row.entry.note || row.entry.kind} · ${formatMoney(row.entry.minor, row.entry.currency, row.entry.precision)} → ${money(row)}`
+    })), waiting.length > 3 && el('li', { text: `and ${waiting.length - 3} more` })),
+    el('button', {
+      type: 'button', class: 'btn-secondary btn-small', 'data-focus': 'rate-value-them',
+      text: waiting.length === 1 ? 'Value it' : `Value them (${waiting.length})`,
+      onclick: () => quietly(async () => {
+        await saveLedger(valueEntries(ledger.state, waiting.map(row => row.entry.id)));
+        showToast(`${waiting.length} ${waiting.length === 1 ? 'entry' : 'entries'} valued in ${reporting}.`);
+      })
+    }));
+
+  return el('div', { class: 'rate-block' },
+    sectionTitle('Dated rates'),
+    el('p', { class: 'note', text: `A rate you save for a day is used to give entries in another currency a ${reporting} value, so they can be counted in totals. Unlike the rough default rates, it is kept with the entry and never changed afterwards.` }),
+    rows.length ? el('ul', { class: 'plain-list' }, rows) : el('p', { class: 'empty', text: 'No dated rates yet.' }),
+    form,
+    valueThem);
 }
 
 /** Inline form for one currency: its rough default rate, and removal. */

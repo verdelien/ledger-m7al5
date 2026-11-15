@@ -148,7 +148,8 @@ function buildReportControls({ state, today, groups, rerender }) {
     onclick: () => openReportFilters(filterButton, state, groups, rerender)
   });
 
-  return el('div', { class: 'rp-controls' }, periodButton, views, filterButton);
+  return el('div', { class: 'rp-controls' }, periodButton, views, filterButton,
+    el('a', { class: 'btn-text', href: '#trips', text: 'Travel & trips' }));
 }
 
 /** A short list of choices in a popover; the current one is marked. */

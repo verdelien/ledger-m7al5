@@ -5,8 +5,9 @@
 // account and the same pot. A purchase can have several part refunds; together they can
 // never be more than the purchase.
 //
-// Purchases shared with a friend, and fees that belong to a transfer, have their own
-// rules and are still refunded in the previous version.
+// A purchase shared with a friend is refunded through saveSharedRefund in
+// shared-logic.js, which keeps both shares straight. Fees that belong to a transfer
+// are still refunded in the previous version.
 
 import { commitBatch, uid } from './model.js';
 import { divideRounded } from './money.js';
@@ -47,7 +48,6 @@ export function canRefundHere(state, purchase) {
     && purchase.kind === 'expense'
     && purchase.status === 'posted'
     && purchase.ledger === 'active'
-    && !purchase.friend
     && !purchase.feeOnReceived
     && !purchase.feeFor;
 }
@@ -80,6 +80,7 @@ export function saveRefund(state, { purchaseId, id = '', minor, date, note = '',
   const purchase = state.entries.find(entry => entry.id === purchaseId);
   if (!purchase) throw Error('The purchase for this refund was not found.');
   if (!canRefundHere(state, purchase)) throw Error('Refunds for this purchase are recorded in the previous version.');
+  if (purchase.friend) throw Error('This purchase is shared with a friend. Record the total refund and your share of it.');
   if (id && !state.entries.some(entry => entry.id === id && entry.kind === 'refund' && entry.original === purchase.id)) {
     throw Error('That refund was not found.');
   }

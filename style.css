@@ -2162,12 +2162,37 @@ button.ed-name:hover .ed-name-text {
   cursor: pointer;
 }
 
+/* Square, print-style tick box (iOS would otherwise draw a rounded blue one). */
 .check-row input[type="checkbox"] {
   flex: none;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--blue-fill);
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0 var(--s2) 0 0;
+  border: 1.5px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.check-row input[type="checkbox"]::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  background: var(--blue-fill);
+  transform: scale(0);
+}
+
+.check-row input[type="checkbox"]:checked::after {
+  transform: scale(1);
+}
+
+.check-row input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 
 /* --------------------------------------------------------------------------
@@ -3594,7 +3619,469 @@ g.rp-mark:focus-visible > .rp-hit {
   border-bottom: 0;
 }
 
+/* Today: reminder that an account is due to be reconciled */
+.reconcile-due {
+  margin-bottom: var(--s4);
+}
+
+.reconcile-note {
+  margin: 0 0 var(--s1);
+}
+
+/* Settings → Data */
+.data-actions {
+  margin-bottom: var(--s5);
+}
+
+.restore-confirm {
+  margin-bottom: var(--s3);
+}
+
+/* Settings → Data → Import from MoneyThings: a name on the left, its choice on the right. */
+.mt-map-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s2) var(--s3);
+  align-items: center;
+  padding: var(--s2) 0;
+}
+
+.mt-map-row .entry-title,
+.mt-map-row .entry-meta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mt-new,
+.mt-start {
+  grid-column: 1 / -1;
+}
+
+.mt-start:not([hidden]) {
+  display: flex;
+  gap: var(--s2);
+  align-items: flex-start;
+  min-height: 44px;
+}
+
+.mt-start label {
+  flex: 1;
+  min-width: 0;
+}
+
+.mt-heading,
+.mt-group {
+  margin: var(--s4) 0 var(--s1);
+}
+
+.mt-problem-list {
+  margin: var(--s1) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mt-footer {
+  margin-top: var(--s4);
+}
+
 /* Due items: the meta line explains the amount, so it wraps instead of being cut off. */
 .due-item .entry-meta {
+  white-space: normal;
+}
+
+/* --------------------------------------------------------------------------
+   Travel and trips (ui/trips.js)
+   -------------------------------------------------------------------------- */
+
+.tv-year {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s2) 0;
+}
+
+.tv-year-label {
+  min-width: 5ch;
+  text-align: center;
+}
+
+.tv-year .btn-text {
+  margin-left: auto;
+}
+
+/* The year's budget: a thin bar. Over budget is vermilion and says so in words. */
+.tv-meter {
+  display: block;
+  height: 6px;
+  margin: var(--s2) 0;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+}
+
+.tv-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--blue-fill);
+}
+
+.tv-meter.is-over {
+  border-color: var(--red);
+}
+
+.tv-meter.is-over .tv-meter-fill {
+  background: var(--red);
+}
+
+.tv-trip-link {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+  min-height: 44px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.tv-arrow {
+  color: var(--blue);
+}
+
+.tv-name {
+  margin: var(--s2) 0 0;
+  font-size: 20px;
+}
+
+.tv-total {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.tv-bar-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--s2);
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.tv-bar-track {
+  grid-column: 1 / -1;
+  display: block;
+  height: 8px;
+  background: var(--tint);
+}
+
+.tv-bar-fill {
+  display: block;
+  height: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   People and shared bills (ui/people.js, and the split fields on Today)
+   -------------------------------------------------------------------------- */
+
+.owed-lines {
+  margin: 0 0 var(--s3);
+}
+
+.owed-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 44px;
+  border-bottom: 1px dashed var(--line-strong);
+  color: inherit;
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.pp-owing {
+  color: var(--red);
+}
+
+.pp-actions {
+  flex-wrap: wrap;
+  margin: var(--s3) 0;
+}
+
+.split-field .check-row {
+  border-bottom: 0;
+}
+
+/* File pickers (restore a backup): the browser's own button, drawn as a square secondary button. */
+input[type="file"] {
+  font: inherit;
+  font-size: 14px;
+  color: var(--muted);
+  max-width: 100%;
+}
+
+input[type="file"]::file-selector-button {
+  min-height: 44px;
+  margin-right: var(--s3);
+  padding: 0 var(--s4);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: .04em;
+  cursor: pointer;
+}
+
+/* People: the running balance under each history line wraps rather than being cut off. */
+.pp-history .entry-meta,
+.list-row .entry-meta.pp-wrap {
+  white-space: normal;
+}
+
+/* --------------------------------------------------------------------------
+   Net worth and investments (ui/networth.js)
+   -------------------------------------------------------------------------- */
+
+.nw-link {
+  display: flex;
+  margin-top: var(--s2);
+}
+
+.nw-total,
+.nw-account {
+  padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.nw-total:last-child,
+.nw-account:last-child {
+  border-bottom: 0;
+}
+
+.nw-currency {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  letter-spacing: .08em;
+}
+
+/* The big figure. It shrinks on a narrow phone and wraps rather than being cut off. */
+.nw-figure {
+  margin: 0;
+  font: 700 clamp(26px, 8.5vw, 38px)/1.15 var(--mono);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.nw-figure.is-negative,
+.nw-part-amount.is-negative {
+  color: var(--red);
+}
+
+.nw-fold {
+  margin-top: var(--s1);
+}
+
+.nw-fold > .fold-body {
+  margin: 0;
+}
+
+.nw-part {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-height: 44px;
+  padding: var(--s1) 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.nw-part:last-child {
+  border-bottom: 0;
+}
+
+.nw-part .entry-text {
+  flex: 1 1 auto;
+}
+
+.nw-part-name {
+  font-size: 15px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.nw-part-amount {
+  flex: none;
+  font: 500 15px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.entry-meta.nw-wrap {
+  white-space: normal;
+}
+
+.nw-account-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.nw-account-head .btn-secondary {
+  flex: none;
+  min-height: 44px;
+}
+
+.nw-name {
+  margin: 0;
+  min-width: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.nw-value {
+  margin: var(--s2) 0 0;
+  font: 700 24px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.nw-account .pot-facts {
+  margin: var(--s2) 0;
+}
+
+/* Gain is blue with ▲, loss vermilion with ▼: the arrow and the word carry it, not colour alone. */
+.nw-gain {
+  margin: var(--s2) 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.nw-gain.is-up {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.nw-gain.is-down {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.nw-before {
+  margin: var(--s2) 0;
+}
+
+.nw-before-row {
+  display: flex;
+  gap: var(--s2);
+}
+
+.nw-before-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nw-before-row .btn-secondary {
+  flex: none;
+  min-height: 44px;
+}
+
+.nw-before .form-error {
+  margin: var(--s2) 0 0;
+}
+
+/* --------------------------------------------------------------------------
+   Wishlist (ui/wishlist.js), on the Pots tab
+   -------------------------------------------------------------------------- */
+
+.wl-open {
+  align-items: flex-start;
+  padding: var(--s1) 0;
+}
+
+.wl-open .entry-text {
+  min-width: 0;
+}
+
+.wl-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1) var(--s2);
+}
+
+.wl-wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.wl-late {
+  color: var(--red);
+}
+
+/* "Review due": a boxed word, so it does not rely on colour alone. */
+.wl-tag {
+  flex: none;
+  padding: 1px var(--s1);
+  border: 1px solid var(--red);
+  color: var(--red);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.wl-saved {
+  display: block;
+  margin-top: var(--s1);
+}
+
+.wl-saved .tv-meter {
+  max-width: 220px;
+  margin: var(--s1) 0;
+}
+
+.wl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s3) 0 var(--s2);
+}
+
+.wl-actions .btn-small {
+  min-height: var(--control);
+}
+
+.wl-buying {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1) var(--s3);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--blue);
+}
+
+/* Spending targets and dated rates (Settings). The meter turns vermilion at the heads-up; the words say it too. */
+.cap-block,
+.rate-block {
+  margin-top: var(--s5);
+}
+
+.cap-meter {
+  max-width: 220px;
+  margin: var(--s1) 0 0;
+}
+
+.rate-sample {
+  margin: var(--s2) 0;
+  padding-left: var(--s3);
+  list-style: none;
+  color: var(--muted);
+}
+
+/* Spending targets: the progress line wraps rather than being cut off. */
+.cap-block .entry-meta {
   white-space: normal;
 }

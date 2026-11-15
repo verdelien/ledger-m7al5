@@ -9,6 +9,9 @@ import { renderSettings } from './settings.js';
 import { renderCalendar } from './calendar.js';
 import { renderPots } from './pots.js';
 import { renderReports } from './reports.js';
+import { renderTrips } from './trips.js';
+import { renderPeople } from './people.js';
+import { renderNetWorth } from './networth.js';
 
 const TABS = [
   { id: 'today', label: 'Today', render: renderToday },
@@ -18,10 +21,17 @@ const TABS = [
   { id: 'settings', label: 'Settings', render: renderSettings }
 ];
 
+// Screens with a route but no tab of their own. `tab` is the tab marked as current while they show.
+const HIDDEN_ROUTES = [
+  { id: 'trips', label: 'Travel', render: renderTrips, tab: 'reports' },
+  { id: 'people', label: 'People', render: renderPeople, tab: 'today' },
+  { id: 'networth', label: 'Net worth', render: renderNetWorth, tab: 'pots' }
+];
+
 /** The hash is '#tab' or '#tab/section' (Settings has sections, e.g. '#settings/estimates'). */
 function currentRoute() {
   const [id, section = ''] = location.hash.replace('#', '').split('/');
-  return { tab: TABS.find(tab => tab.id === id) || TABS[0], section };
+  return { tab: [...TABS, ...HIDDEN_ROUTES].find(tab => tab.id === id) || TABS[0], section };
 }
 
 function currentTab() {
@@ -35,7 +45,7 @@ function renderScreen() {
   const focusKey = document.activeElement?.dataset?.focus;
 
   for (const link of document.querySelectorAll('#tabs a')) {
-    if (link.dataset.tab === tab.id) link.setAttribute('aria-current', 'page');
+    if (link.dataset.tab === (tab.tab || tab.id)) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
 
